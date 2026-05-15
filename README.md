@@ -4,6 +4,13 @@
 
 종목명을 검색하면 네이버 증권 리서치의 최신 리포트를 자동 수집하고, Gemini AI가 투자의견·목표주가·핵심 포인트·리스크를 한 페이지로 정리해드립니다.
 
+**🌐 서비스 URL**
+
+| | URL |
+|---|---|
+| Frontend | https://krx-aily.vercel.app |
+| Backend API | https://krx-aily-backend-pqbhq3dqna-du.a.run.app/docs |
+
 ---
 
 ## 주요 기능
@@ -23,13 +30,13 @@
 
 | 영역 | 기술 |
 |---|---|
-| Backend | FastAPI, Python 3.11 |
+| Backend | FastAPI, Python 3.13 |
 | 스크래핑 | httpx, BeautifulSoup4 |
 | PDF 파싱 | pdfplumber |
 | AI 분석 | Google Gemini (google-genai) |
 | Frontend | Next.js 14 (App Router), TypeScript |
 | 스타일 | Tailwind CSS |
-| 배포 | Backend: Railway/Render · Frontend: Vercel |
+| 배포 | Backend: Google Cloud Run · Frontend: Vercel |
 
 ---
 
