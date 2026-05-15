@@ -1,6 +1,7 @@
 import logging
 import re
 from dataclasses import dataclass
+from datetime import date, timedelta
 
 import httpx
 from bs4 import BeautifulSoup
@@ -25,13 +26,14 @@ class ReportMeta:
     pdf_url: str = ""  # fetch_pdf_url() 호출 후 채워짐
 
 
-async def fetch_report_list(ticker: str, n: int = 5) -> list[ReportMeta]:
+async def fetch_report_list(ticker: str, n: int = 5, days_limit: int = 90) -> list[ReportMeta]:
     """
     네이버 증권 리서치에서 특정 종목의 최신 리포트 목록을 수집한다.
-    최대 3페이지까지 순회하여 n개를 채운다.
+    최대 3페이지까지 순회하여 n개를 채우며, days_limit일 이내의 리포트만 수집한다.
     """
     reports: list[ReportMeta] = []
     page = 1
+    cutoff = date.today() - timedelta(days=days_limit)
 
     async with httpx.AsyncClient(headers=_HEADERS, timeout=15) as client:
         while len(reports) < n and page <= 3:
@@ -48,6 +50,7 @@ async def fetch_report_list(ticker: str, n: int = 5) -> list[ReportMeta]:
             rows = soup.select("table.type_1 tr")
 
             found_in_page = 0
+            date_exceeded = False
             for row in rows:
                 cols = row.select("td")
                 # 구조: [종목명, 제목, 증권사, (빈칸), 날짜, 조회수]
@@ -68,14 +71,24 @@ async def fetch_report_list(ticker: str, n: int = 5) -> list[ReportMeta]:
                     continue
 
                 nid = nid_match.group(1)
-                date = _parse_date(date_raw)
+                report_date_str = _parse_date(date_raw)
                 detail_url = f"{_BASE}/{href}" if href.startswith("company_read") else href
+
+                try:
+                    report_date = date.fromisoformat(report_date_str)
+                except ValueError:
+                    report_date = None
+
+                # 네이버 리서치는 날짜 역순이므로 cutoff를 벗어나면 이후 리포트도 모두 오래됨
+                if report_date is not None and report_date < cutoff:
+                    date_exceeded = True
+                    break
 
                 reports.append(ReportMeta(
                     nid=nid,
                     title=title,
                     firm=firm,
-                    date=date,
+                    date=report_date_str,
                     detail_url=detail_url,
                 ))
                 found_in_page += 1
@@ -83,7 +96,7 @@ async def fetch_report_list(ticker: str, n: int = 5) -> list[ReportMeta]:
                 if len(reports) >= n:
                     break
 
-            if found_in_page == 0:
+            if found_in_page == 0 or date_exceeded:
                 break
             page += 1
 
@@ -114,9 +127,9 @@ async def fetch_pdf_url(detail_url: str) -> str:
     return match.group(1) if match else ""
 
 
-async def fetch_reports_with_pdf(ticker: str, n: int = 5) -> list[ReportMeta]:
+async def fetch_reports_with_pdf(ticker: str, n: int = 5, days_limit: int = 90) -> list[ReportMeta]:
     """리포트 목록 수집 후 각 리포트의 PDF URL까지 채워서 반환한다."""
-    reports = await fetch_report_list(ticker, n)
+    reports = await fetch_report_list(ticker, n, days_limit)
 
     async with httpx.AsyncClient(headers=_HEADERS, timeout=15) as client:
         for report in reports:
