@@ -35,6 +35,7 @@ class AnalyzeRequest(BaseModel):
     ticker: str | None = None
     name: str | None = None
     n: int = 5
+    days_limit: int = 90
     reports: list[ReportItem] | None = None
 
 
@@ -91,10 +92,11 @@ async def search(
 async def get_reports(
     ticker: str,
     n: int = Query(default=5, ge=1, le=20, description="수집할 리포트 수"),
+    days_limit: int = Query(default=90, ge=1, description="리포트 발행 기간 제한 (일)"),
 ):
     """네이버 증권 리서치에서 해당 종목의 최신 리포트 목록과 PDF URL을 수집한다."""
     try:
-        reports = await fetch_reports_with_pdf(ticker, n)
+        reports = await fetch_reports_with_pdf(ticker, n, days_limit)
     except Exception as e:
         logger.error("리포트 수집 실패 (ticker=%s): %s", ticker, e)
         raise HTTPException(
@@ -105,7 +107,10 @@ async def get_reports(
     if not reports:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail={"code": "NO_REPORTS", "message": f"'{ticker}' 종목의 리포트를 찾을 수 없습니다."},
+            detail={
+                "code": "NO_REPORTS",
+                "message": f"최근 {days_limit}일 내 발행된 리포트가 없습니다.",
+            },
         )
 
     return [
@@ -166,7 +171,7 @@ async def analyze(body: AnalyzeRequest):
         ]
     else:
         try:
-            reports = await fetch_reports_with_pdf(ticker, body.n)
+            reports = await fetch_reports_with_pdf(ticker, body.n, body.days_limit)
         except Exception as e:
             logger.error("리포트 수집 실패: %s", e)
             raise HTTPException(
@@ -177,7 +182,10 @@ async def analyze(body: AnalyzeRequest):
     if not reports:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail={"code": "NO_REPORTS", "message": "분석할 리포트가 없습니다."},
+            detail={
+                "code": "NO_REPORTS",
+                "message": f"최근 {body.days_limit}일 내 발행된 리포트가 없습니다.",
+            },
         )
 
     texts: list[str] = await asyncio.gather(
