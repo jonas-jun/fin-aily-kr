@@ -1,7 +1,7 @@
 import json
 import logging
 from dataclasses import dataclass
-from datetime import date
+from datetime import datetime, timezone, timedelta
 
 from google import genai
 
@@ -120,7 +120,7 @@ async def analyze_reports(
         ticker=ticker,
         name=name,
         report_count=len(reports),
-        analyzed_at=date.today().isoformat(),
+        analyzed_at=datetime.now(timezone(timedelta(hours=9))).date().isoformat(),
         opinions=parsed.get("opinions", {"buy": 0, "neutral": 0, "sell": 0}),
         target_price=target_price,
         key_points=parsed.get("key_points", []),
