@@ -18,26 +18,15 @@ _HEADERS = {
 
 async def fetch_current_price(ticker: str) -> float | None:
     """현재주가 조회. 네이버 메인 페이지 → 모바일 API → 폴링 API 순으로 시도한다."""
-    print(f"[price] 시작 ticker={ticker}", flush=True)
-
     price = await _fetch_from_main_page(ticker)
     if price is not None:
-        print(f"[price] 메인페이지 성공 ticker={ticker} price={price}", flush=True)
         return price
 
-    print(f"[price] 메인페이지 실패, 모바일 API 시도 ticker={ticker}", flush=True)
     price = await _fetch_from_mobile_api(ticker)
     if price is not None:
-        print(f"[price] 모바일 API 성공 ticker={ticker} price={price}", flush=True)
         return price
 
-    print(f"[price] 모바일 API 실패, 폴링 API 시도 ticker={ticker}", flush=True)
-    price = await _fetch_from_polling_api(ticker)
-    if price is not None:
-        print(f"[price] 폴링 API 성공 ticker={ticker} price={price}", flush=True)
-    else:
-        print(f"[price] 모든 API 실패 ticker={ticker}", flush=True)
-    return price
+    return await _fetch_from_polling_api(ticker)
 
 
 async def _fetch_from_main_page(ticker: str) -> float | None:
@@ -53,7 +42,7 @@ async def _fetch_from_main_page(ticker: str) -> float | None:
         if tag:
             return float(tag.text.strip().replace(",", ""))
     except Exception as e:
-        print(f"[price] 메인페이지 예외 ticker={ticker}: {e}", flush=True)
+        logger.warning("메인페이지 주가 조회 실패 (ticker=%s): %s", ticker, e)
     return None
 
 
@@ -69,7 +58,7 @@ async def _fetch_from_mobile_api(ticker: str) -> float | None:
         if price_str is not None:
             return float(str(price_str).replace(",", ""))
     except Exception as e:
-        print(f"[price] 모바일 API 예외 ticker={ticker}: {e}", flush=True)
+        logger.warning("모바일 API 주가 조회 실패 (ticker=%s): %s", ticker, e)
     return None
 
 
@@ -90,5 +79,5 @@ async def _fetch_from_polling_api(ticker: str) -> float | None:
                     if nv is not None:
                         return float(nv)
     except Exception as e:
-        print(f"[price] 폴링 API 예외 ticker={ticker}: {e}", flush=True)
+        logger.warning("폴링 API 주가 조회 실패 (ticker=%s): %s", ticker, e)
     return None
