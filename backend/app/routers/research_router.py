@@ -4,6 +4,7 @@ import logging
 from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel
 
+from app.services.dart_service import fetch_dart_data
 from app.services.naver_scraper import ReportMeta, fetch_reports_with_pdf
 from app.services.pdf_extractor import extract_text_from_pdf_url
 from app.services.price_fetcher import fetch_current_price
@@ -47,17 +48,25 @@ class TargetPrice(BaseModel):
     current_price: float | None = None
 
 
-class Opinions(BaseModel):
-    buy: int
-    neutral: int
-    sell: int
-
-
 class SourceItem(BaseModel):
     firm: str
     title: str
     date: str
     pdf_url: str
+    target_price: int | None = None
+
+
+class QuarterlyFinancialItem(BaseModel):
+    quarter: str
+    revenue: int | None
+    operating_profit: int | None
+    net_income: int | None
+
+
+class CorporateFilingsAnalysis(BaseModel):
+    revenue_structure_change: str
+    profit_trend: str
+    key_changes: list[str]
 
 
 class AnalyzeResponse(BaseModel):
@@ -65,12 +74,13 @@ class AnalyzeResponse(BaseModel):
     name: str
     report_count: int
     analyzed_at: str
-    opinions: Opinions
     target_price: TargetPrice
     key_points: list[str]
     risks: list[str]
     sources: list[SourceItem]
     model_version: str
+    quarterly_financials: list[QuarterlyFinancialItem] = []
+    corporate_filings_analysis: CorporateFilingsAnalysis | None = None
 
 
 # ── 엔드포인트 ────────────────────────────────────────────────────────────────
@@ -196,9 +206,10 @@ async def analyze(body: AnalyzeRequest):
         async with sem:
             return await extract_text_from_pdf_url(url)
 
-    texts, current_price = await asyncio.gather(
+    texts, current_price, dart_data = await asyncio.gather(
         asyncio.gather(*[extract_with_limit(r.pdf_url) for r in reports]),
         fetch_current_price(ticker),
+        fetch_dart_data(ticker),
     )
 
     try:
@@ -207,6 +218,7 @@ async def analyze(body: AnalyzeRequest):
             name=name,
             reports=reports,
             texts=list(texts),
+            dart_data=dart_data or None,
         )
     except Exception as e:
         logger.error("Gemini 분석 실패: %s", e)
@@ -215,15 +227,32 @@ async def analyze(body: AnalyzeRequest):
             detail={"code": "ANALYSIS_FAILED", "message": "보고서 생성에 실패했습니다."},
         )
 
+    filings = (
+        CorporateFilingsAnalysis(**result.corporate_filings_analysis)
+        if result.corporate_filings_analysis
+        else None
+    )
+
+    quarterly_financials = [
+        QuarterlyFinancialItem(
+            quarter=q["period"],
+            revenue=q.get("revenue"),
+            operating_profit=q.get("operating_income"),
+            net_income=q.get("net_income"),
+        )
+        for q in (dart_data or [])
+    ]
+
     return AnalyzeResponse(
         ticker=result.ticker,
         name=result.name,
         report_count=result.report_count,
         analyzed_at=result.analyzed_at,
-        opinions=Opinions(**result.opinions),
         target_price=TargetPrice(**result.target_price, current_price=current_price),
         key_points=result.key_points,
         risks=result.risks,
         sources=[SourceItem(**s) for s in result.sources],
         model_version=result.model_version,
+        quarterly_financials=quarterly_financials,
+        corporate_filings_analysis=filings,
     )

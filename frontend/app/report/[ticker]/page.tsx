@@ -5,8 +5,9 @@ import { useParams, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { api, type AnalyzeResponse } from "@/lib/api";
 import { ReportSkeleton } from "@/components/report/ReportSkeleton";
-import { OpinionBadge } from "@/components/report/OpinionBadge";
 import { TargetPriceCard } from "@/components/report/TargetPriceCard";
+import { QuarterlyFinancialsTable } from "@/components/report/QuarterlyFinancialsTable";
+import { FilingsAnalysisCard } from "@/components/report/FilingsAnalysisCard";
 import { KeyPointsList } from "@/components/report/KeyPointsList";
 import { RisksList } from "@/components/report/RisksList";
 import { SourceList } from "@/components/report/SourceList";
@@ -70,8 +71,11 @@ function ReportContent() {
 
       {!loading && !error && data && (
         <div className="space-y-4">
-          <OpinionBadge opinions={data.opinions} />
           <TargetPriceCard targetPrice={data.target_price} />
+          <QuarterlyFinancialsTable financials={data.quarterly_financials} />
+          {data.corporate_filings_analysis && (
+            <FilingsAnalysisCard analysis={data.corporate_filings_analysis} />
+          )}
           <KeyPointsList points={data.key_points} />
           <RisksList risks={data.risks} />
           <SourceList sources={data.sources} />
