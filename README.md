@@ -8,7 +8,7 @@
 
 | | URL |
 |---|---|
-| Frontend | https://krx-aily.vercel.app |
+| Frontend | https://fin-aily-kr.vercel.app |
 | Backend API | https://krx-aily-backend-pqbhq3dqna-du.a.run.app/docs |
 
 ---
