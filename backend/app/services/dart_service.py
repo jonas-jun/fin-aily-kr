@@ -220,8 +220,8 @@ async def fetch_last_4_quarters_reports(corp_code: str) -> list[dict]:
     for year in years:
         all_quarters.extend(_compute_actual_quarters(cumulative_by_year[year], year))
 
-    # 가장 최근 4개 분기만 반환 (이미 시간순 오름차순)
-    return all_quarters[-4:]
+    # 가장 최근 5개 분기만 반환 (이미 시간순 오름차순)
+    return all_quarters[-5:]
 
 
 async def fetch_dart_data(ticker: str) -> list[dict]:
