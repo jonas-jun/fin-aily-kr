@@ -9,3 +9,4 @@ pdfplumber
 python-dotenv
 pyyaml
 lxml
+yfinance

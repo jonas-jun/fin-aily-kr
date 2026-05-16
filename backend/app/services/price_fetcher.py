@@ -1,7 +1,9 @@
+import asyncio
 import json
 import logging
 
 import httpx
+import yfinance as yf
 
 logger = logging.getLogger(__name__)
 
@@ -16,51 +18,72 @@ _HEADERS = {
 
 
 async def fetch_current_price(ticker: str) -> float | None:
-    """현재주가를 조회한다. 네이버 모바일 API를 우선 시도하고 실패 시 폴링 API로 폴백한다."""
-    logger.info("[price] 주가 조회 시작 (ticker=%s)", ticker)
+    """현재주가 조회. yfinance → 네이버 모바일 API → 폴링 API 순으로 시도한다."""
+    print(f"[price] 주가 조회 시작 ticker={ticker}", flush=True)
 
-    price = await _fetch_from_mobile_api(ticker)
+    price = await _fetch_from_yahoo(ticker)
     if price is not None:
-        logger.info("[price] 모바일 API 성공 (ticker=%s, price=%s)", ticker, price)
+        print(f"[price] yfinance 성공 ticker={ticker} price={price}", flush=True)
         return price
 
-    logger.warning("[price] 모바일 API None 반환, 폴링 API로 폴백 (ticker=%s)", ticker)
+    print(f"[price] yfinance 실패, 네이버 모바일 API 시도 ticker={ticker}", flush=True)
+    price = await _fetch_from_mobile_api(ticker)
+    if price is not None:
+        print(f"[price] 네이버 모바일 API 성공 ticker={ticker} price={price}", flush=True)
+        return price
+
+    print(f"[price] 네이버 모바일 API 실패, 폴링 API 시도 ticker={ticker}", flush=True)
     price = await _fetch_from_polling_api(ticker)
     if price is not None:
-        logger.info("[price] 폴링 API 성공 (ticker=%s, price=%s)", ticker, price)
+        print(f"[price] 폴링 API 성공 ticker={ticker} price={price}", flush=True)
     else:
-        logger.warning("[price] 두 API 모두 실패 (ticker=%s)", ticker)
+        print(f"[price] 모든 API 실패 ticker={ticker}", flush=True)
     return price
 
 
+def _yf_sync_price(ticker: str) -> float | None:
+    """yfinance로 주가 조회 (동기). KOSPI(.KS) → KOSDAQ(.KQ) 순으로 시도."""
+    for suffix in (".KS", ".KQ"):
+        try:
+            t = yf.Ticker(ticker + suffix)
+            price = t.fast_info.last_price
+            if price and float(price) > 0:
+                return float(price)
+        except Exception as e:
+            print(f"[price] yfinance {ticker}{suffix} 실패: {e}", flush=True)
+    return None
+
+
+async def _fetch_from_yahoo(ticker: str) -> float | None:
+    try:
+        return await asyncio.to_thread(_yf_sync_price, ticker)
+    except Exception as e:
+        print(f"[price] yfinance 예외 ticker={ticker}: {e}", flush=True)
+        return None
+
+
 async def _fetch_from_mobile_api(ticker: str) -> float | None:
-    """네이버 모바일 주식 API에서 현재주가 조회."""
     url = _MOBILE_URL.format(ticker=ticker)
     try:
         async with httpx.AsyncClient(headers=_HEADERS, timeout=8) as client:
             resp = await client.get(url)
             resp.raise_for_status()
             data = resp.json()
-
         price_str = data.get("closePrice") or data.get("stockPrice")
         if price_str is not None:
             return float(str(price_str).replace(",", ""))
     except Exception as e:
-        logger.warning("모바일 API 주가 조회 실패 (ticker=%s): %s", ticker, e)
-
+        print(f"[price] 네이버 모바일 API 예외 ticker={ticker}: {e}", flush=True)
     return None
 
 
 async def _fetch_from_polling_api(ticker: str) -> float | None:
-    """네이버 금융 realtime 폴링 API에서 현재주가 조회."""
     params = {"query": f"SERVICE_ITEM:{ticker}"}
     try:
         async with httpx.AsyncClient(headers=_HEADERS, timeout=8) as client:
             resp = await client.get(_POLLING_URL, params=params)
             resp.raise_for_status()
-
         data = json.loads(resp.content.decode("euc-kr", errors="replace"))
-
         areas = data.get("result", {}).get("areas", [])
         for area in areas:
             if area.get("name") == "SERVICE_ITEM":
@@ -70,6 +93,5 @@ async def _fetch_from_polling_api(ticker: str) -> float | None:
                     if nv is not None:
                         return float(nv)
     except Exception as e:
-        logger.warning("폴링 API 주가 조회 실패 (ticker=%s): %s", ticker, e)
-
+        print(f"[price] 폴링 API 예외 ticker={ticker}: {e}", flush=True)
     return None
