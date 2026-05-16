@@ -13,17 +13,25 @@ export interface TargetPrice {
   current_price: number | null;
 }
 
-export interface Opinions {
-  buy: number;
-  neutral: number;
-  sell: number;
-}
-
 export interface SourceItem {
   firm: string;
   title: string;
   date: string;
   pdf_url: string;
+  target_price: number | null;
+}
+
+export interface QuarterlyFinancialItem {
+  quarter: string;
+  revenue: number | null;
+  operating_profit: number | null;
+  net_income: number | null;
+}
+
+export interface CorporateFilingsAnalysis {
+  revenue_structure_change: string;
+  profit_trend: string;
+  key_changes: string[];
 }
 
 export interface AnalyzeResponse {
@@ -31,12 +39,13 @@ export interface AnalyzeResponse {
   name: string;
   report_count: number;
   analyzed_at: string;
-  opinions: Opinions;
   target_price: TargetPrice;
   key_points: string[];
   risks: string[];
   sources: SourceItem[];
   model_version: string;
+  quarterly_financials: QuarterlyFinancialItem[];
+  corporate_filings_analysis: CorporateFilingsAnalysis | null;
 }
 
 export class ApiError extends Error {

@@ -18,16 +18,25 @@ export function SourceList({ sources }: Props) {
               <span className="text-sm text-slate-700 truncate">{s.title}</span>
               <span className="text-xs text-slate-400">{s.date}</span>
             </div>
-            {s.pdf_url && (
-              <a
-                href={s.pdf_url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex-shrink-0 text-xs text-[#EF4444] hover:text-red-700 font-medium"
-              >
-                PDF ↗
-              </a>
-            )}
+            <div className="flex-shrink-0 flex flex-col items-end gap-1">
+              {s.target_price != null ? (
+                <span className="text-xs font-semibold text-[#EF4444]">
+                  {s.target_price.toLocaleString("ko-KR")}원
+                </span>
+              ) : (
+                <span className="text-xs text-slate-300">not_rated</span>
+              )}
+              {s.pdf_url && (
+                <a
+                  href={s.pdf_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs text-[#EF4444] hover:text-red-700 font-medium"
+                >
+                  PDF ↗
+                </a>
+              )}
+            </div>
           </li>
         ))}
       </ul>
