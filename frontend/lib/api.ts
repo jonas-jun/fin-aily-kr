@@ -28,24 +28,17 @@ export interface QuarterlyFinancialItem {
   net_income: number | null;
 }
 
-export interface CorporateFilingsAnalysis {
-  revenue_structure_change: string;
-  profit_trend: string;
-  key_changes: string[];
-}
-
 export interface AnalyzeResponse {
   ticker: string;
   name: string;
   report_count: number;
   analyzed_at: string;
   target_price: TargetPrice;
-  key_points: string[];
-  risks: string[];
   sources: SourceItem[];
   model_version: string;
   quarterly_financials: QuarterlyFinancialItem[];
-  corporate_filings_analysis: CorporateFilingsAnalysis | null;
+  full_report: string | null;
+  dart_only: boolean;
 }
 
 export class ApiError extends Error {

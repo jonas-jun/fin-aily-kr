@@ -4,7 +4,7 @@ import logging
 from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel
 
-from app.services.dart_service import fetch_dart_data
+from app.services.dart_service import fetch_dart_data, fetch_dart_filing_texts
 from app.services.naver_scraper import ReportMeta, fetch_reports_with_pdf
 from app.services.pdf_extractor import extract_text_from_pdf_url
 from app.services.price_fetcher import fetch_current_price
@@ -63,24 +63,17 @@ class QuarterlyFinancialItem(BaseModel):
     net_income: int | None
 
 
-class CorporateFilingsAnalysis(BaseModel):
-    revenue_structure_change: str
-    profit_trend: str
-    key_changes: list[str]
-
-
 class AnalyzeResponse(BaseModel):
     ticker: str
     name: str
     report_count: int
     analyzed_at: str
     target_price: TargetPrice
-    key_points: list[str]
-    risks: list[str]
     sources: list[SourceItem]
     model_version: str
     quarterly_financials: list[QuarterlyFinancialItem] = []
-    corporate_filings_analysis: CorporateFilingsAnalysis | None = None
+    full_report: str | None = None
+    dart_only: bool = False
 
 
 # ── 엔드포인트 ────────────────────────────────────────────────────────────────
@@ -191,34 +184,49 @@ async def analyze(body: AnalyzeRequest):
                 detail={"code": "SCRAPE_FAILED", "message": "리포트 수집에 실패했습니다."},
             )
 
+    # ── DART 폴백 or 정상 분석 ────────────────────────────────────────────────
     if not reports:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={
-                "code": "NO_REPORTS",
-                "message": f"최근 {body.days_limit}일 내 발행된 리포트가 없습니다.",
-            },
+        # 증권사 리포트가 없으면 DART 공시 데이터로 폴백 시도
+        dart_data, dart_filings, current_price = await asyncio.gather(
+            fetch_dart_data(ticker),
+            fetch_dart_filing_texts(ticker),
+            fetch_current_price(ticker),
         )
+        if not dart_data and not dart_filings:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={
+                    "code": "NO_DATA",
+                    "message": f"최근 {body.days_limit}일 내 발행된 리포트가 없고 DART 공시 데이터도 조회되지 않았습니다.",
+                },
+            )
+        texts_list: list[str] = []
+        dart_only = True
+    else:
+        sem = asyncio.Semaphore(2)
 
-    sem = asyncio.Semaphore(2)
+        async def extract_with_limit(url: str) -> str:
+            async with sem:
+                return await extract_text_from_pdf_url(url)
 
-    async def extract_with_limit(url: str) -> str:
-        async with sem:
-            return await extract_text_from_pdf_url(url)
-
-    texts, current_price, dart_data = await asyncio.gather(
-        asyncio.gather(*[extract_with_limit(r.pdf_url) for r in reports]),
-        fetch_current_price(ticker),
-        fetch_dart_data(ticker),
-    )
+        fetched_texts, current_price, dart_data = await asyncio.gather(
+            asyncio.gather(*[extract_with_limit(r.pdf_url) for r in reports]),
+            fetch_current_price(ticker),
+            fetch_dart_data(ticker),
+        )
+        texts_list = list(fetched_texts)
+        dart_filings = None
+        dart_only = False
 
     try:
         result: AnalysisResult = await analyze_reports(
             ticker=ticker,
             name=name,
             reports=reports,
-            texts=list(texts),
+            texts=texts_list,
             dart_data=dart_data or None,
+            dart_filings=dart_filings or None,
+            dart_only=dart_only,
         )
     except Exception as e:
         logger.error("Gemini 분석 실패: %s", e)
@@ -226,12 +234,6 @@ async def analyze(body: AnalyzeRequest):
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={"code": "ANALYSIS_FAILED", "message": "보고서 생성에 실패했습니다."},
         )
-
-    filings = (
-        CorporateFilingsAnalysis(**result.corporate_filings_analysis)
-        if result.corporate_filings_analysis
-        else None
-    )
 
     quarterly_financials = [
         QuarterlyFinancialItem(
@@ -249,10 +251,9 @@ async def analyze(body: AnalyzeRequest):
         report_count=result.report_count,
         analyzed_at=result.analyzed_at,
         target_price=TargetPrice(**result.target_price, current_price=current_price),
-        key_points=result.key_points,
-        risks=result.risks,
         sources=[SourceItem(**s) for s in result.sources],
         model_version=result.model_version,
         quarterly_financials=quarterly_financials,
-        corporate_filings_analysis=filings,
+        full_report=result.full_report,
+        dart_only=result.dart_only,
     )

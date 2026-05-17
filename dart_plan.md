@@ -1,276 +1,200 @@
-# [구현 계획] fin-Aily-kr 기능 개선 — krx_aily_plan.md 기반
+# 최종 보고서 프롬프트 전환 계획
 
-> 작성 기준일: 2026-05-17  
-> 참고 문서: `krx_aily_plan.md`
+## 목표
+
+`krx_aily_plan.md`의 기관투자자급 애널리스트 프롬프트로 최종 보고서를 대체한다.
+
+**유지하는 카드**
+- 목표주가/현재주가 카드 (`TargetPriceCard`)
+- 분기별 주요 재무 카드 (`QuarterlyFinancialsTable`)
+- 분석 근거 리포트 카드 (`SourceList`)
+
+**제거하는 카드**
+- 핵심 투자 포인트 (`KeyPointsList`)
+- 리스크 (`RisksList`)
+- 공시 분석 요약 (`FilingsAnalysisCard`)
+
+**추가하는 카드**
+- 전문 통합 보고서 (`FullReportCard`) — 마크다운 렌더링
 
 ---
 
-## 현황 파악 (구현 전 코드 상태)
+## 변경 범위
 
-| 구분 | 현재 상태 | 필요 작업 |
-|---|---|---|
-| `dart_service.py` | 매출액·영업이익만 추출, 당기순이익 미수집 | `net_income` 필드 추가 |
-| `research_router.py` | `Opinions` 모델 존재, `SourceItem`에 개별 목표가 없음, 분기 재무 응답 없음 | Opinions 제거, `target_price` 추가, `QuarterlyFinancialItem` 추가 |
-| `report_analyzer.py` | Gemini 프롬프트에 opinions 포함, 소스별 목표가 미반환 | 프롬프트 개편, `report_target_prices` 파싱 추가 |
-| `frontend/lib/api.ts` | `Opinions` 인터페이스 존재, `SourceItem`에 목표가 없음 | 타입 구조 동기화 |
-| `frontend/app/report/[ticker]/page.tsx` | `<OpinionBadge>` 렌더링 중 | 호출부 제거 |
-| `frontend/components/report/SourceList.tsx` | 소스별 목표가 미표시 | `target_price` 렌더링 추가 |
-| `QuarterlyFinancialsTable.tsx` | 미존재 | 신규 생성 |
+### 1. `backend/app/services/report_analyzer.py`
 
----
+#### 현재 구조
+- `_build_prompt()` → 단일 Gemini 호출 → JSON 응답  
+  (`report_target_prices`, `target_price`, `key_points`, `risks`, `corporate_filings_analysis`)
 
-## 구현 순서 (의존성 기준 권장 순서)
+#### 변경 후 구조 — LLM 호출 2단계로 분리 (asyncio.gather로 병렬 실행)
+
+**Call 1 — 목표주가 추출 (기존 유지, 경량화)**
 
 ```
-[1] dart_service.py — net_income 추가
-[2] report_analyzer.py — 프롬프트 개편 (opinions 제거 + report_target_prices 추가)
-[3] research_router.py — 모델 개편 (Opinions 삭제, SourceItem 확장, QuarterlyFinancialItem 추가)
-[4] frontend/lib/api.ts — 타입 동기화
-[5] frontend/components — SourceList 수정, QuarterlyFinancialsTable 신규, OpinionBadge 제거
-[6] frontend/app/report/[ticker]/page.tsx — 레이아웃 조정
+목적: report_target_prices, target_price(avg/min/max) 추출
+응답 형식: JSON
+프롬프트: 기존 _build_prompt에서 dart_instruction/dart_schema/key_points/risks 제거
+```
+
+**Call 2 — 전문 보고서 생성 (신규)**
+
+```
+목적: 마크다운 형식의 기관투자자급 통합 보고서 생성
+응답 형식: 마크다운 텍스트 (JSON 아님)
+프롬프트: krx_aily_plan.md의 프롬프트 그대로 사용
+  - {company_name} → f-string으로 실제 기업명 삽입
+  - 보고서 블록: 기존 reports_block과 동일
+  - DART 블록: 기존 dart_block과 동일 (분기 재무 수치 제공)
+```
+
+#### `AnalysisResult` dataclass 변경
+
+```python
+# 제거
+key_points: list[str]
+risks: list[str]
+corporate_filings_analysis: dict | None
+
+# 추가
+full_report: str | None = None  # 마크다운 전문 보고서
+```
+
+#### `analyze_reports()` 변경
+
+```python
+# asyncio.gather로 두 LLM 호출 병렬 실행
+target_price_result, full_report_text = await asyncio.gather(
+    _extract_target_prices(client, model, report_dicts, dart_data),
+    _generate_full_report(client, model, name, report_dicts, dart_data),
+)
 ```
 
 ---
 
-## [기능 1] 소스별 개별 목표주가 표시
+### 2. `backend/app/routers/research_router.py`
 
-### 백엔드
+#### `AnalyzeResponse` 변경
 
-**`backend/app/services/report_analyzer.py`**
+```python
+# 제거
+key_points: list[str]
+risks: list[str]
+corporate_filings_analysis: CorporateFilingsAnalysis | None
 
-1. `_build_prompt()` 내 응답 JSON 스키마에 `"report_target_prices"` 필드 추가:
-   ```json
-   "report_target_prices": [85000, null, 95000]
-   ```
-   - 분석한 리포트 순서대로 배열, 미제시·파악 불가 시 `null`
-   - 기존 `"opinions"` 블록은 이 단계에서 함께 제거 ([기능 2] 참조)
+# 추가
+full_report: str | None = None
+```
 
-2. `_build_prompt()` 지시사항 1번 수정:
-   - 기존: "투자의견(매수/중립/매도)과 목표주가를 파악"
-   - 변경: "각 리포트의 **목표주가만** 파악. 미제시 시 null"
+#### `CorporateFilingsAnalysis` Pydantic 모델 제거
 
-3. `analyze_reports()` 파싱 로직 수정:
-   ```python
-   report_target_prices = parsed.get("report_target_prices", [])
-   sources = [
-       {
-           "firm": r.firm,
-           "title": r.title,
-           "date": r.date,
-           "pdf_url": r.pdf_url,
-           "target_price": report_target_prices[i] if i < len(report_target_prices) else None,
-       }
-       for i, r in enumerate(reports)
-   ]
-   ```
+#### `analyze()` 핸들러에서 응답 구성 변경
 
-4. `AnalysisResult` 데이터클래스: `sources` 항목에 `target_price` 자동 포함됨 (별도 변경 불필요)
-
-**`backend/app/routers/research_router.py`**
-
-5. `SourceItem` 모델에 필드 추가:
-   ```python
-   class SourceItem(BaseModel):
-       firm: str
-       title: str
-       date: str
-       pdf_url: str
-       target_price: int | None = None   # 추가
-   ```
-
-### 프론트엔드
-
-**`frontend/lib/api.ts`**
-
-6. `SourceItem` 인터페이스 수정:
-   ```ts
-   export interface SourceItem {
-     firm: string;
-     title: string;
-     date: string;
-     pdf_url: string;
-     target_price: number | null;   // 추가
-   }
-   ```
-
-**`frontend/components/report/SourceList.tsx`**
-
-7. 각 소스 항목 우측에 목표주가 표시:
-   - `target_price` 존재 시: `{target_price.toLocaleString("ko-KR")}원` (빨간 계열 텍스트)
-   - `null`이면: `not_rated` (텍스트, `text-slate-300` 톤)
-   - PDF 링크와 같은 `flex-shrink-0` 영역 내 수직 배치
+```python
+return AnalyzeResponse(
+    ...
+    full_report=result.full_report,
+    # key_points, risks, corporate_filings_analysis 제거
+)
+```
 
 ---
 
-## [기능 2] 매수/매도 의견 집계(OpinionBadge) 제거
+### 3. `frontend/lib/api.ts`
 
-### 백엔드
+```typescript
+// AnalyzeResponse에서 제거
+key_points: string[];
+risks: string[];
+corporate_filings_analysis: CorporateFilingsAnalysis | null;
 
-**`backend/app/services/report_analyzer.py`**
+// AnalyzeResponse에 추가
+full_report: string | null;
 
-1. `_build_prompt()` JSON 스키마에서 `"opinions"` 블록 삭제
-2. 지시사항에서 "투자의견(매수/중립/매도) 파악" 문구 삭제
-3. `AnalysisResult` 데이터클래스에서 `opinions: dict` 필드 삭제
-4. `analyze_reports()` 반환부에서 `opinions=parsed.get("opinions", ...)` 라인 삭제
-
-**`backend/app/routers/research_router.py`**
-
-5. `Opinions` Pydantic 모델 클래스 전체 삭제
-6. `AnalyzeResponse`에서 `opinions: Opinions` 필드 삭제
-7. `analyze()` 함수 반환부에서 `opinions=Opinions(**result.opinions)` 라인 삭제
-
-### 프론트엔드
-
-**`frontend/lib/api.ts`**
-
-8. `Opinions` 인터페이스 전체 삭제
-9. `AnalyzeResponse`에서 `opinions: Opinions;` 필드 삭제
-
-**`frontend/app/report/[ticker]/page.tsx`**
-
-10. `import { OpinionBadge } from "@/components/report/OpinionBadge"` 삭제
-11. `<OpinionBadge opinions={data.opinions} />` 렌더링 줄 삭제
-
-**`frontend/components/report/OpinionBadge.tsx`**
-
-12. 파일 삭제 (사용처 제거 후 진행)
+// CorporateFilingsAnalysis 인터페이스 제거
+```
 
 ---
 
-## [기능 3] 최근 4개 분기 재무 테이블
+### 4. `frontend/components/report/FullReportCard.tsx` (신규 파일)
 
-### 백엔드
+- `react-markdown` + `remark-gfm`으로 마크다운 렌더링
+  - `remark-gfm`: GFM 표(Table) 지원 — 보고서 내 재무 표 렌더링에 필수
+- `@tailwindcss/typography` prose 클래스로 스타일링
+- `full_report`가 null이면 null 반환
 
-**`backend/app/services/dart_service.py`**
+```tsx
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
-1. `_fetch_quarter_financials()` 내 당기순이익 추출 추가:
-   ```python
-   revenue = operating_income = net_income = None
-   for row in data.get("list", []):
-       account = row.get("account_nm", "")
-       amount_str = row.get("thstrm_amount", "").replace(",", "").replace("-", "")
-       try:
-           amount = int(amount_str) if amount_str else None
-       except ValueError:
-           amount = None
+export function FullReportCard({ report }: { report: string | null }) {
+  if (!report) return null;
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white p-6">
+      <div className="prose prose-slate prose-sm max-w-none">
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{report}</ReactMarkdown>
+      </div>
+    </div>
+  );
+}
+```
 
-       if "매출" in account and revenue is None:
-           revenue = amount
-       if "영업이익" in account and operating_income is None:
-           operating_income = amount
-       if "당기순이익" in account and net_income is None:   # 추가
-           net_income = amount
-   ```
+#### 패키지 추가 필요
 
-2. 반환 딕셔너리에 `net_income` 추가:
-   ```python
-   return {
-       "period": f"{year} {label}",
-       "revenue": revenue,
-       "operating_income": operating_income,
-       "net_income": net_income,   # 추가
-   }
-   ```
+```bash
+npm install react-markdown remark-gfm
+npm install -D @tailwindcss/typography
+```
 
-3. `_build_dart_block()` in `report_analyzer.py` — 당기순이익 표시 추가 (LLM 컨텍스트용):
-   ```python
-   ni = f"{q['net_income']:,}" if q.get("net_income") is not None else "N/A"
-   lines.append(f"- {q['period']}: 매출액 {rev}원, 영업이익 {op}원, 당기순이익 {ni}원")
-   ```
-
-**`backend/app/routers/research_router.py`**
-
-4. `QuarterlyFinancialItem` Pydantic 모델 추가 (기존 모델 정의 블록에):
-   ```python
-   class QuarterlyFinancialItem(BaseModel):
-       quarter: str                      # 예: "2025 3Q"
-       revenue: int | None
-       operating_profit: int | None
-       net_income: int | None
-   ```
-
-5. `AnalyzeResponse`에 필드 추가:
-   ```python
-   quarterly_financials: list[QuarterlyFinancialItem] = []
-   ```
-
-6. `analyze()` 함수 응답 빌드부에서 `dart_data` → `quarterly_financials` 변환:
-   ```python
-   quarterly_financials = [
-       QuarterlyFinancialItem(
-           quarter=q["period"],
-           revenue=q.get("revenue"),
-           operating_profit=q.get("operating_income"),
-           net_income=q.get("net_income"),
-       )
-       for q in (dart_data or [])
-   ]
-
-   return AnalyzeResponse(
-       ...
-       quarterly_financials=quarterly_financials,
-   )
-   ```
-
-### 프론트엔드
-
-**`frontend/lib/api.ts`**
-
-7. `QuarterlyFinancialItem` 인터페이스 추가:
-   ```ts
-   export interface QuarterlyFinancialItem {
-     quarter: string;
-     revenue: number | null;
-     operating_profit: number | null;
-     net_income: number | null;
-   }
-   ```
-
-8. `AnalyzeResponse`에 필드 추가:
-   ```ts
-   quarterly_financials: QuarterlyFinancialItem[];
-   ```
-
-**`frontend/components/report/QuarterlyFinancialsTable.tsx` (신규 생성)**
-
-9. 컴포넌트 스펙:
-   - Props: `{ financials: QuarterlyFinancialItem[] }`
-   - `financials` 배열이 비어있으면 `null` 반환
-   - 테이블 헤더: 분기 | 매출액 | 영업이익 | 당기순이익
-   - 금액 포맷: 억 원 단위 변환 (`Math.round(n / 100_000_000)`) + "억원" 표기
-   - `null` 값은 `—`으로 표시
-   - 디자인: 기존 카드 패턴 (`rounded-xl border border-slate-200 bg-white p-4`) 유지
-   - 헤더 라벨: `text-xs font-semibold text-slate-500 uppercase tracking-wide`
-
-**`frontend/app/report/[ticker]/page.tsx`**
-
-10. `QuarterlyFinancialsTable` import 추가
-11. `<TargetPriceCard />` 바로 아래에 배치:
-    ```tsx
-    <TargetPriceCard targetPrice={data.target_price} />
-    <QuarterlyFinancialsTable financials={data.quarterly_financials} />
-    ```
+`tailwind.config.js`에 `require("@tailwindcss/typography")` 플러그인 추가
 
 ---
 
-## 파일별 작업 체크리스트
+### 5. `frontend/app/report/[ticker]/page.tsx`
 
-| 파일 | 작업 유형 | 핵심 변경 내용 |
-|---|---|---|
-| `backend/app/services/dart_service.py` | 수정 | `net_income` 추출 추가 |
-| `backend/app/services/report_analyzer.py` | 수정 | Gemini 프롬프트 개편 (opinions 제거, report_target_prices 추가), `_build_dart_block` net_income 추가, `AnalysisResult.opinions` 삭제, sources에 target_price 매핑 |
-| `backend/app/routers/research_router.py` | 수정 | `Opinions` 모델 삭제, `SourceItem.target_price` 추가, `QuarterlyFinancialItem` 추가, `AnalyzeResponse` 개편 |
-| `frontend/lib/api.ts` | 수정 | `Opinions` 삭제, `SourceItem.target_price` 추가, `QuarterlyFinancialItem` 추가 |
-| `frontend/app/report/[ticker]/page.tsx` | 수정 | `OpinionBadge` 제거, `QuarterlyFinancialsTable` 추가 |
-| `frontend/components/report/SourceList.tsx` | 수정 | 소스별 `target_price` 표시 (없으면 `not_rated`) |
-| `frontend/components/report/QuarterlyFinancialsTable.tsx` | **신규** | 분기 재무 테이블 컴포넌트 |
-| `frontend/components/report/OpinionBadge.tsx` | **삭제** | 사용처 제거 후 파일 삭제 |
+```tsx
+// 제거 imports
+import { FilingsAnalysisCard } from "@/components/report/FilingsAnalysisCard";
+import { KeyPointsList } from "@/components/report/KeyPointsList";
+import { RisksList } from "@/components/report/RisksList";
+
+// 추가 import
+import { FullReportCard } from "@/components/report/FullReportCard";
+
+// JSX — 카드 순서
+<TargetPriceCard targetPrice={data.target_price} />
+<QuarterlyFinancialsTable financials={data.quarterly_financials} />
+<FullReportCard report={data.full_report} />
+<SourceList sources={data.sources} />   {/* 분석 근거 리포트 유지 */}
+```
 
 ---
 
-## 주의 사항
+## 삭제 예정 파일
 
-- **DART API 분기 코드**: 현재 `_QUARTER_CODES`에 `"11011" (연간)` 포함됨. 테이블에는 연간 데이터가 분기처럼 보일 수 있으므로 `quarter` 필드 레이블을 그대로 사용하되, 프론트에서 시각적으로 구분이 필요한 경우 "연간" suffix 처리 고려
-- **`fs_div=CFS` 우선**: 연결재무제표 없을 시 OFS로 폴백하는 로직은 현재 구현 유지
-- **금액 단위**: 백엔드는 원 단위 정수로 반환, 프론트에서 억 원으로 변환 (API 스키마 변경 없음)
-- **opinions 제거 시 타입 에러**: `OpinionBadge` 삭제 전 page.tsx에서 먼저 import/사용부를 제거해야 빌드 오류 방지
+- `frontend/components/report/FilingsAnalysisCard.tsx`
+- `frontend/components/report/KeyPointsList.tsx`
+- `frontend/components/report/RisksList.tsx`
+
+---
+
+## 작업 순서
+
+1. `report_analyzer.py` — Call 1/2 분리, `AnalysisResult` 수정
+2. `research_router.py` — 응답 모델 수정
+3. `frontend/lib/api.ts` — 타입 수정
+4. 패키지 설치 (`react-markdown`, `remark-gfm`, `@tailwindcss/typography`)
+5. `tailwind.config.js` — typography 플러그인 추가
+6. `FullReportCard.tsx` 신규 생성
+7. `page.tsx` — 컴포넌트 교체
+8. 불필요 컴포넌트 파일 삭제
+9. 로컬 테스트 (백엔드 + 프론트엔드 동시)
+
+---
+
+## 유의사항
+
+- Call 1과 Call 2는 서로 다른 응답 형식(JSON vs 마크다운)이므로 `_parse_response()`를 Call 1에만 사용한다.
+- DART 분기 재무 데이터는 LLM에게 텍스트로 제공하지만, `QuarterlyFinancialsTable`은 DART 원본 데이터를 직접 사용하므로 변경 없다.
+- 목표주가 추출(Call 1)과 전문 보고서 생성(Call 2)을 병렬로 실행해 레이턴시를 최소화한다.
+- 보고서 생성 모델은 기존 `feat.model` (Gemini) 그대로 사용한다.
