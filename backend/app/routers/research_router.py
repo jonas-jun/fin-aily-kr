@@ -63,24 +63,16 @@ class QuarterlyFinancialItem(BaseModel):
     net_income: int | None
 
 
-class CorporateFilingsAnalysis(BaseModel):
-    revenue_structure_change: str
-    profit_trend: str
-    key_changes: list[str]
-
-
 class AnalyzeResponse(BaseModel):
     ticker: str
     name: str
     report_count: int
     analyzed_at: str
     target_price: TargetPrice
-    key_points: list[str]
-    risks: list[str]
     sources: list[SourceItem]
     model_version: str
     quarterly_financials: list[QuarterlyFinancialItem] = []
-    corporate_filings_analysis: CorporateFilingsAnalysis | None = None
+    full_report: str | None = None
 
 
 # ── 엔드포인트 ────────────────────────────────────────────────────────────────
@@ -227,12 +219,6 @@ async def analyze(body: AnalyzeRequest):
             detail={"code": "ANALYSIS_FAILED", "message": "보고서 생성에 실패했습니다."},
         )
 
-    filings = (
-        CorporateFilingsAnalysis(**result.corporate_filings_analysis)
-        if result.corporate_filings_analysis
-        else None
-    )
-
     quarterly_financials = [
         QuarterlyFinancialItem(
             quarter=q["period"],
@@ -249,10 +235,8 @@ async def analyze(body: AnalyzeRequest):
         report_count=result.report_count,
         analyzed_at=result.analyzed_at,
         target_price=TargetPrice(**result.target_price, current_price=current_price),
-        key_points=result.key_points,
-        risks=result.risks,
         sources=[SourceItem(**s) for s in result.sources],
         model_version=result.model_version,
         quarterly_financials=quarterly_financials,
-        corporate_filings_analysis=filings,
+        full_report=result.full_report,
     )

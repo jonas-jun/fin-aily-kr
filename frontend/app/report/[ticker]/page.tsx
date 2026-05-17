@@ -7,9 +7,7 @@ import { api, type AnalyzeResponse } from "@/lib/api";
 import { ReportSkeleton } from "@/components/report/ReportSkeleton";
 import { TargetPriceCard } from "@/components/report/TargetPriceCard";
 import { QuarterlyFinancialsTable } from "@/components/report/QuarterlyFinancialsTable";
-import { FilingsAnalysisCard } from "@/components/report/FilingsAnalysisCard";
-import { KeyPointsList } from "@/components/report/KeyPointsList";
-import { RisksList } from "@/components/report/RisksList";
+import { FullReportCard } from "@/components/report/FullReportCard";
 import { SourceList } from "@/components/report/SourceList";
 
 function ReportContent() {
@@ -73,11 +71,7 @@ function ReportContent() {
         <div className="space-y-4">
           <TargetPriceCard targetPrice={data.target_price} />
           <QuarterlyFinancialsTable financials={data.quarterly_financials} />
-          {data.corporate_filings_analysis && (
-            <FilingsAnalysisCard analysis={data.corporate_filings_analysis} />
-          )}
-          <KeyPointsList points={data.key_points} />
-          <RisksList risks={data.risks} />
+          <FullReportCard report={data.full_report} analyzedAt={data.analyzed_at} />
           <SourceList sources={data.sources} />
         </div>
       )}
