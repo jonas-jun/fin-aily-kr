@@ -38,6 +38,7 @@ export interface AnalyzeResponse {
   model_version: string;
   quarterly_financials: QuarterlyFinancialItem[];
   full_report: string | null;
+  dart_only: boolean;
 }
 
 export class ApiError extends Error {

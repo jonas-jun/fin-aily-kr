@@ -71,7 +71,7 @@ function ReportContent() {
         <div className="space-y-4">
           <TargetPriceCard targetPrice={data.target_price} />
           <QuarterlyFinancialsTable financials={data.quarterly_financials} />
-          <FullReportCard report={data.full_report} analyzedAt={data.analyzed_at} />
+          <FullReportCard report={data.full_report} analyzedAt={data.analyzed_at} dartOnly={data.dart_only} />
           <SourceList sources={data.sources} />
         </div>
       )}
