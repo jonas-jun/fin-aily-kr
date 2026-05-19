@@ -71,6 +71,8 @@ def _build_is_table(dart_data: list[dict]) -> str:
         return ""
     enriched = enrich_quarters(dart_data)
     lines = [
+        "*연결재무제표 기준*",
+        "",
         "| 분기 | 매출액(억) | 영업이익(억) | OPM | 순이익(억) | NPM |",
         "|------|----------:|------------:|----:|----------:|----:|",
     ]
