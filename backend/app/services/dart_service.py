@@ -5,6 +5,7 @@ import zipfile
 import xml.etree.ElementTree as ET
 from datetime import datetime
 from html.parser import HTMLParser
+from zoneinfo import ZoneInfo
 
 import httpx
 
@@ -28,9 +29,6 @@ _BS_FIELDS = (
     "cash", "receivables", "inventory", "total_assets",
     "equity", "short_term_debt", "long_term_debt",
 )
-# 하위 호환: report_analyzer 등에서 참조하는 통합 튜플
-_IS_CF_FIELDS = _IS_FIELDS + _CF_FIELDS
-
 # (field_name, sj_div, match_keywords, exclude_keywords)
 # sj_div는 문자열 또는 문자열 리스트(복수 허용). IS 항목은 CIS(포괄손익계산서)도 fallback으로 검색.
 # fnlttSinglAcntAll 응답 rows에서 계정별 첫 번째 매칭 값을 추출하는 패턴
@@ -305,7 +303,7 @@ async def fetch_last_4_quarters_reports(corp_code: str) -> list[dict]:
         logger.warning("DART_API_KEY가 설정되지 않아 공시 데이터를 건너뜁니다.")
         return []
 
-    current_year = datetime.now().year
+    current_year = datetime.now(ZoneInfo("Asia/Seoul")).year
     years = [current_year - 1, current_year]
 
     all_tasks = []
@@ -354,7 +352,7 @@ async def _fetch_filing_documents(corp_code: str, max_count: int = 3) -> list[di
         return []
 
     # DART list.json API는 bgn_de 없이 pblntf_ty만 지정하면 013(데이터 없음)을 반환하는 경우가 있음
-    bgn_de = str(datetime.now().year - 3) + "0101"
+    bgn_de = str(datetime.now(ZoneInfo("Asia/Seoul")).year - 3) + "0101"
     async with httpx.AsyncClient(timeout=30) as client:
         list_url = (
             f"{DART_BASE}/list.json"

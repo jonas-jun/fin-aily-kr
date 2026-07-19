@@ -69,7 +69,7 @@ function ReportContent() {
       {!loading && !error && data && (
         <div className="space-y-4">
           <TargetPriceCard targetPrice={data.target_price} />
-<FullReportCard report={data.full_report} analyzedAt={data.analyzed_at} dartOnly={data.dart_only} />
+          <FullReportCard report={data.full_report} analyzedAt={data.analyzed_at} dartOnly={data.dart_only} />
           <SourceList sources={data.sources} />
         </div>
       )}

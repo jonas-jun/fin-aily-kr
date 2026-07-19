@@ -1,8 +1,10 @@
 import asyncio
 import json
 import logging
+import re
 from dataclasses import dataclass
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from google import genai
 
@@ -91,7 +93,6 @@ def _build_is_table(dart_data: list[dict]) -> str:
 
 def _inject_is_table(report_text: str, is_table: str) -> str:
     """§2 헤더 바로 다음 줄에 Python 생성 IS 테이블을 삽입."""
-    import re
     if not is_table or not report_text:
         return report_text
     match = re.search(r"(##\s*2[\.。．].*?\n)", report_text)
@@ -494,7 +495,7 @@ async def analyze_reports(
         ticker=ticker,
         name=name,
         report_count=len(reports),
-        analyzed_at=datetime.now(timezone(timedelta(hours=9))).date().isoformat(),
+        analyzed_at=datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat(),
         target_price=target_price,
         sources=sources,
         model_version=feat.model,

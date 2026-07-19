@@ -3,20 +3,17 @@ from functools import lru_cache
 from pathlib import Path
 
 import yaml
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+
     gemini_api_key: str = ""
     dart_api_key: str = ""
     app_env: str = "development"
     debug: bool = False
     cors_origins: list[str] = ["http://localhost:3000"]
-
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-
 
 @lru_cache
 def get_settings() -> Settings:
@@ -27,19 +24,13 @@ def get_settings() -> Settings:
 class FeatureModelConfig:
     provider: str
     model: str
-    max_tokens: int
 
 
-_model_config: dict | None = None
-
-
+@lru_cache
 def _load_model_config() -> dict:
-    global _model_config
-    if _model_config is None:
-        config_path = Path(__file__).parent / "model_config.yaml"
-        with open(config_path) as f:
-            _model_config = yaml.safe_load(f)
-    return _model_config
+    config_path = Path(__file__).parent / "model_config.yaml"
+    with open(config_path) as f:
+        return yaml.safe_load(f)
 
 
 def get_feature_config(feature: str) -> FeatureModelConfig:
@@ -48,5 +39,4 @@ def get_feature_config(feature: str) -> FeatureModelConfig:
     return FeatureModelConfig(
         provider=feat["provider"],
         model=feat["model"],
-        max_tokens=feat.get("max_tokens", 2048),
     )
