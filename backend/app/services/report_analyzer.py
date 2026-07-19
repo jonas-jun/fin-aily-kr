@@ -446,6 +446,7 @@ async def analyze_reports(
     dart_data: list[dict] | None = None,
     dart_filings: list[dict] | None = None,
     dart_only: bool = False,
+    client: genai.Client | None = None,
 ) -> AnalysisResult:
     settings = get_settings()
     feat = get_feature_config("krx_report")
@@ -460,7 +461,7 @@ async def analyze_reports(
         for i, r in enumerate(reports)
     ]
 
-    client = genai.Client(api_key=settings.gemini_api_key)
+    client = client or genai.Client(api_key=settings.gemini_api_key)
 
     if dart_only:
         full_report = await _generate_full_report(

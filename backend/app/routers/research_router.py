@@ -1,7 +1,7 @@
 import asyncio
 import logging
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Query, Request, status
 from pydantic import BaseModel
 
 from app.services.dart_service import fetch_dart_data, fetch_dart_filing_texts
@@ -72,11 +72,12 @@ class AnalyzeResponse(BaseModel):
 
 @router.get("/search", response_model=list[TickerItem], summary="종목명 검색")
 async def search(
+    request: Request,
     q: str = Query(..., min_length=1, description="검색할 종목명"),
     limit: int = Query(default=10, ge=1, le=30),
 ):
     """종목명 부분 일치 검색. 네이버 증권 자동완성 API 기반."""
-    results = await search_tickers(q, limit=limit)
+    results = await search_tickers(q, limit=limit, client=request.app.state.http)
     if not results:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -87,13 +88,14 @@ async def search(
 
 @router.get("/reports/{ticker}", response_model=list[ReportItem], summary="리포트 목록 수집")
 async def get_reports(
+    request: Request,
     ticker: str,
     n: int = Query(default=5, ge=1, le=20, description="수집할 리포트 수"),
     days_limit: int = Query(default=90, ge=1, description="리포트 발행 기간 제한 (일)"),
 ):
     """네이버 증권 리서치에서 해당 종목의 최신 리포트 목록과 PDF URL을 수집한다."""
     try:
-        reports = await fetch_reports_with_pdf(ticker, n, days_limit)
+        reports = await fetch_reports_with_pdf(ticker, n, days_limit, client=request.app.state.http)
     except Exception as e:
         logger.error("리포트 수집 실패 (ticker=%s): %s", ticker, e)
         raise HTTPException(
@@ -124,7 +126,7 @@ async def get_reports(
 
 
 @router.post("/analyze", response_model=AnalyzeResponse, summary="AI 통합 보고서 생성")
-async def analyze(body: AnalyzeRequest):
+async def analyze(body: AnalyzeRequest, request: Request):
     """
     리포트 목록 수집 → PDF 텍스트 추출 → Gemini 통합 분석 보고서 생성.
 
@@ -134,7 +136,7 @@ async def analyze(body: AnalyzeRequest):
     """
     # ── 종목 결정 ─────────────────────────────────────────────────────────────
     if body.query:
-        results = await search_tickers(body.query, limit=1)
+        results = await search_tickers(body.query, limit=1, client=request.app.state.http)
         if not results:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -168,7 +170,9 @@ async def analyze(body: AnalyzeRequest):
         ]
     else:
         try:
-            reports = await fetch_reports_with_pdf(ticker, body.n, body.days_limit)
+            reports = await fetch_reports_with_pdf(
+                ticker, body.n, body.days_limit, client=request.app.state.http
+            )
         except Exception as e:
             logger.error("리포트 수집 실패: %s", e)
             raise HTTPException(
@@ -180,9 +184,9 @@ async def analyze(body: AnalyzeRequest):
     if not reports:
         # 증권사 리포트가 없으면 DART 공시 데이터로 폴백 시도
         dart_data, dart_filings, current_price = await asyncio.gather(
-            fetch_dart_data(ticker),
-            fetch_dart_filing_texts(ticker),
-            fetch_current_price(ticker),
+            fetch_dart_data(ticker, client=request.app.state.http),
+            fetch_dart_filing_texts(ticker, client=request.app.state.http),
+            fetch_current_price(ticker, client=request.app.state.http),
         )
         if not dart_data and not dart_filings:
             raise HTTPException(
@@ -199,13 +203,13 @@ async def analyze(body: AnalyzeRequest):
 
         async def extract_with_limit(url: str) -> str:
             async with sem:
-                return await extract_text_from_pdf_url(url)
+                return await extract_text_from_pdf_url(url, client=request.app.state.http)
 
         fetched_texts, current_price, dart_data, dart_filings = await asyncio.gather(
             asyncio.gather(*[extract_with_limit(r.pdf_url) for r in reports]),
-            fetch_current_price(ticker),
-            fetch_dart_data(ticker),
-            fetch_dart_filing_texts(ticker),
+            fetch_current_price(ticker, client=request.app.state.http),
+            fetch_dart_data(ticker, client=request.app.state.http),
+            fetch_dart_filing_texts(ticker, client=request.app.state.http),
         )
         texts_list = list(fetched_texts)
         dart_only = False
@@ -219,6 +223,7 @@ async def analyze(body: AnalyzeRequest):
             dart_data=dart_data or None,
             dart_filings=dart_filings or None,
             dart_only=dart_only,
+            client=request.app.state.gemini,
         )
     except Exception as e:
         logger.error("Gemini 분석 실패: %s", e)

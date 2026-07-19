@@ -12,6 +12,12 @@ def anyio_backend():
     return "asyncio"
 
 
+@pytest.fixture(autouse=True)
+def app_clients():
+    app.state.http = object()
+    app.state.gemini = None
+
+
 async def _request(method: str, path: str, **kwargs) -> httpx.Response:
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:

@@ -6,14 +6,11 @@ from datetime import date, timedelta
 import httpx
 from bs4 import BeautifulSoup
 
+from app.services.http_client import NAVER_HTML_HEADERS, client_scope
+
 logger = logging.getLogger(__name__)
 
 _BASE = "https://finance.naver.com/research"
-_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-    "Accept-Language": "ko-KR,ko;q=0.9",
-    "Referer": "https://finance.naver.com/",
-}
 
 
 @dataclass
@@ -26,7 +23,12 @@ class ReportMeta:
     pdf_url: str = ""  # fetch_pdf_url() 호출 후 채워짐
 
 
-async def fetch_report_list(ticker: str, n: int = 5, days_limit: int = 90) -> list[ReportMeta]:
+async def fetch_report_list(
+    ticker: str,
+    n: int = 5,
+    days_limit: int = 90,
+    client: httpx.AsyncClient | None = None,
+) -> list[ReportMeta]:
     """
     네이버 증권 리서치에서 특정 종목의 최신 리포트 목록을 수집한다.
     최대 3페이지까지 순회하여 n개를 채우며, days_limit일 이내의 리포트만 수집한다.
@@ -35,11 +37,11 @@ async def fetch_report_list(ticker: str, n: int = 5, days_limit: int = 90) -> li
     page = 1
     cutoff = date.today() - timedelta(days=days_limit)
 
-    async with httpx.AsyncClient(headers=_HEADERS, timeout=15) as client:
+    async with client_scope(client) as http:
         while len(reports) < n and page <= 3:
             url = f"{_BASE}/company_list.naver?searchType=itemCode&itemCode={ticker}&page={page}"
             try:
-                resp = await client.get(url)
+                resp = await http.get(url, headers=NAVER_HTML_HEADERS, timeout=15)
                 resp.raise_for_status()
             except httpx.HTTPError as e:
                 logger.error("리포트 목록 요청 실패 (ticker=%s, page=%d): %s", ticker, page, e)
@@ -103,11 +105,11 @@ async def fetch_report_list(ticker: str, n: int = 5, days_limit: int = 90) -> li
     return reports[:n]
 
 
-async def fetch_pdf_url(detail_url: str) -> str:
+async def fetch_pdf_url(detail_url: str, client: httpx.AsyncClient | None = None) -> str:
     """리포트 상세 페이지에서 PDF 직접 링크를 추출한다."""
-    async with httpx.AsyncClient(headers=_HEADERS, timeout=15) as client:
+    async with client_scope(client) as http:
         try:
-            resp = await client.get(detail_url)
+            resp = await http.get(detail_url, headers=NAVER_HTML_HEADERS, timeout=15)
             resp.raise_for_status()
         except httpx.HTTPError as e:
             logger.error("상세 페이지 요청 실패 (%s): %s", detail_url, e)
@@ -127,13 +129,17 @@ async def fetch_pdf_url(detail_url: str) -> str:
     return match.group(1) if match else ""
 
 
-async def fetch_reports_with_pdf(ticker: str, n: int = 5, days_limit: int = 90) -> list[ReportMeta]:
+async def fetch_reports_with_pdf(
+    ticker: str,
+    n: int = 5,
+    days_limit: int = 90,
+    client: httpx.AsyncClient | None = None,
+) -> list[ReportMeta]:
     """리포트 목록 수집 후 각 리포트의 PDF URL까지 채워서 반환한다."""
-    reports = await fetch_report_list(ticker, n, days_limit)
-
-    async with httpx.AsyncClient(headers=_HEADERS, timeout=15) as client:
+    async with client_scope(client) as http:
+        reports = await fetch_report_list(ticker, n, days_limit, client=http)
         for report in reports:
-            pdf_url = await fetch_pdf_url(report.detail_url)
+            pdf_url = await fetch_pdf_url(report.detail_url, client=http)
             report.pdf_url = pdf_url
 
     return reports

@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 import httpx
 
 from app.config import get_settings
+from app.services.http_client import client_scope
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +67,7 @@ _REPRT_CODES = [
 ]
 
 _corp_code_map: dict[str, str] | None = None
+_corp_code_lock = asyncio.Lock()
 
 
 class _TextExtractor(HTMLParser):
@@ -101,45 +103,52 @@ def _html_to_text(html: str) -> str:
     return parser.get_text()
 
 
-async def _load_corp_code_map() -> dict[str, str]:
+async def _load_corp_code_map(client: httpx.AsyncClient | None = None) -> dict[str, str]:
     global _corp_code_map
     if _corp_code_map is not None:
         return _corp_code_map
 
-    settings = get_settings()
-    url = f"{DART_BASE}/corpCode.xml?crtfc_key={settings.dart_api_key}"
-    try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.get(url)
-            resp.raise_for_status()
-    except Exception as e:
-        logger.error("corpCode.xml 다운로드 실패: %s", e)
-        _corp_code_map = {}
+    async with _corp_code_lock:
+        if _corp_code_map is not None:
+            return _corp_code_map
+
+        settings = get_settings()
+        try:
+            async with client_scope(client) as http:
+                resp = await http.get(
+                    f"{DART_BASE}/corpCode.xml",
+                    params={"crtfc_key": settings.dart_api_key},
+                    timeout=30,
+                )
+                resp.raise_for_status()
+        except Exception as e:
+            logger.error("corpCode.xml 다운로드 실패: %s", e)
+            _corp_code_map = {}
+            return _corp_code_map
+
+        try:
+            with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
+                xml_bytes = zf.read("CORPCODE.xml")
+            root = ET.fromstring(xml_bytes)
+        except Exception as e:
+            logger.error("corpCode.xml 파싱 실패: %s", e)
+            _corp_code_map = {}
+            return _corp_code_map
+
+        mapping: dict[str, str] = {}
+        for item in root.findall("list"):
+            stock_code = (item.findtext("stock_code") or "").strip()
+            corp_code = (item.findtext("corp_code") or "").strip()
+            if stock_code and corp_code:
+                mapping[stock_code] = corp_code
+
+        _corp_code_map = mapping
+        logger.info("corpCode 매핑 로드 완료: %d개 종목", len(mapping))
         return _corp_code_map
 
-    try:
-        with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
-            xml_bytes = zf.read("CORPCODE.xml")
-        root = ET.fromstring(xml_bytes)
-    except Exception as e:
-        logger.error("corpCode.xml 파싱 실패: %s", e)
-        _corp_code_map = {}
-        return _corp_code_map
 
-    mapping: dict[str, str] = {}
-    for item in root.findall("list"):
-        stock_code = (item.findtext("stock_code") or "").strip()
-        corp_code = (item.findtext("corp_code") or "").strip()
-        if stock_code and corp_code:
-            mapping[stock_code] = corp_code
-
-    _corp_code_map = mapping
-    logger.info("corpCode 매핑 로드 완료: %d개 종목", len(mapping))
-    return _corp_code_map
-
-
-async def get_corp_code(ticker: str) -> str:
-    mapping = await _load_corp_code_map()
+async def get_corp_code(ticker: str, client: httpx.AsyncClient | None = None) -> str:
+    mapping = await _load_corp_code_map(client=client)
     return mapping.get(ticker.zfill(6), "")
 
 
@@ -198,7 +207,7 @@ async def _fetch_full_financials(
     for fs_div in ("CFS", "OFS"):
         url = f"{DART_BASE}/fnlttSinglAcntAll.json{base}&fs_div={fs_div}"
         try:
-            resp = await client.get(url)
+            resp = await client.get(url, timeout=20)
             data = resp.json()
         except Exception as e:
             logger.warning("DART 전체계정 조회 실패 (%s %s %s): %s", year, label, fs_div, e)
@@ -293,7 +302,10 @@ def _compute_actual_quarters(cumulative: dict[str, dict], year: int) -> list[dic
     return quarters
 
 
-async def fetch_last_4_quarters_reports(corp_code: str) -> list[dict]:
+async def fetch_last_4_quarters_reports(
+    corp_code: str,
+    client: httpx.AsyncClient | None = None,
+) -> list[dict]:
     """최근 5개 분기 재무 데이터(IS + BS + CF) 수집. 실패 시 빈 리스트 반환."""
     if not corp_code:
         return []
@@ -308,12 +320,12 @@ async def fetch_last_4_quarters_reports(corp_code: str) -> list[dict]:
 
     all_tasks = []
     task_meta: list[tuple[int, str]] = []
-    async with httpx.AsyncClient(timeout=20) as client:
+    async with client_scope(client) as http:
         for year in years:
             for reprt_code, label in _REPRT_CODES:
                 all_tasks.append(
                     _fetch_full_financials(
-                        client, corp_code, year, reprt_code, label, settings.dart_api_key
+                        http, corp_code, year, reprt_code, label, settings.dart_api_key
                     )
                 )
                 task_meta.append((year, label))
@@ -332,20 +344,28 @@ async def fetch_last_4_quarters_reports(corp_code: str) -> list[dict]:
     return all_quarters[-5:]
 
 
-async def fetch_dart_data(ticker: str) -> list[dict]:
+async def fetch_dart_data(
+    ticker: str,
+    client: httpx.AsyncClient | None = None,
+) -> list[dict]:
     """ticker 기준 DART 공시 재무 데이터 수집 진입점. 실패 시 빈 리스트 반환."""
     try:
-        corp_code = await get_corp_code(ticker)
-        if not corp_code:
-            logger.info("corp_code 매핑 실패 (ticker=%s)", ticker)
-            return []
-        return await fetch_last_4_quarters_reports(corp_code)
+        async with client_scope(client) as http:
+            corp_code = await get_corp_code(ticker, client=http)
+            if not corp_code:
+                logger.info("corp_code 매핑 실패 (ticker=%s)", ticker)
+                return []
+            return await fetch_last_4_quarters_reports(corp_code, client=http)
     except Exception as e:
         logger.error("DART 데이터 수집 중 예외 (ticker=%s): %s", ticker, e)
         return []
 
 
-async def _fetch_filing_documents(corp_code: str, max_count: int = 3) -> list[dict]:
+async def _fetch_filing_documents(
+    corp_code: str,
+    max_count: int = 3,
+    client: httpx.AsyncClient | None = None,
+) -> list[dict]:
     """최근 사업보고서·분기보고서 목록 조회 후 문서 ZIP을 다운로드하여 텍스트 추출."""
     settings = get_settings()
     if not settings.dart_api_key or not corp_code:
@@ -353,7 +373,7 @@ async def _fetch_filing_documents(corp_code: str, max_count: int = 3) -> list[di
 
     # DART list.json API는 bgn_de 없이 pblntf_ty만 지정하면 013(데이터 없음)을 반환하는 경우가 있음
     bgn_de = str(datetime.now(ZoneInfo("Asia/Seoul")).year - 3) + "0101"
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with client_scope(client) as http:
         list_url = (
             f"{DART_BASE}/list.json"
             f"?crtfc_key={settings.dart_api_key}"
@@ -363,7 +383,7 @@ async def _fetch_filing_documents(corp_code: str, max_count: int = 3) -> list[di
             f"&page_count={max_count}"
         )
         try:
-            resp = await client.get(list_url)
+            resp = await http.get(list_url, timeout=30)
             data = resp.json()
         except Exception as e:
             logger.warning("DART 공시 목록 조회 실패 (corp_code=%s): %s", corp_code, e)
@@ -386,7 +406,7 @@ async def _fetch_filing_documents(corp_code: str, max_count: int = 3) -> list[di
                 f"&rcept_no={rcept_no}"
             )
             try:
-                doc_resp = await client.get(doc_url)
+                doc_resp = await http.get(doc_url, timeout=30)
                 doc_resp.raise_for_status()
             except Exception as e:
                 logger.warning("DART 문서 다운로드 실패 (rcept_no=%s): %s", rcept_no, e)
@@ -424,13 +444,18 @@ async def _fetch_filing_documents(corp_code: str, max_count: int = 3) -> list[di
     return results
 
 
-async def fetch_dart_filing_texts(ticker: str, max_count: int = 3) -> list[dict]:
+async def fetch_dart_filing_texts(
+    ticker: str,
+    max_count: int = 3,
+    client: httpx.AsyncClient | None = None,
+) -> list[dict]:
     """ticker 기준 최근 DART 공시 문서 텍스트 수집 진입점. 실패 시 빈 리스트 반환."""
     try:
-        corp_code = await get_corp_code(ticker)
-        if not corp_code:
-            return []
-        return await _fetch_filing_documents(corp_code, max_count=max_count)
+        async with client_scope(client) as http:
+            corp_code = await get_corp_code(ticker, client=http)
+            if not corp_code:
+                return []
+            return await _fetch_filing_documents(corp_code, max_count=max_count, client=http)
     except Exception as e:
         logger.error("DART 공시 텍스트 수집 예외 (ticker=%s): %s", ticker, e)
         return []

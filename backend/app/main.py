@@ -1,5 +1,9 @@
 import logging
 import sys
+from contextlib import asynccontextmanager
+
+import httpx
+from google import genai
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,12 +20,28 @@ logging.basicConfig(
 
 settings = get_settings()
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    gemini_client = genai.Client(api_key=settings.gemini_api_key) if settings.gemini_api_key else None
+    async with httpx.AsyncClient() as http_client:
+        app.state.http = http_client
+        app.state.gemini = gemini_client
+        try:
+            yield
+        finally:
+            if gemini_client is not None:
+                await gemini_client.aio.aclose()
+                gemini_client.close()
+
+
 app = FastAPI(
     title="KRX-Aily API",
     description="한국 주식 리서치 리포트 수집 및 AI 분석",
     version="1.0.0",
     docs_url="/docs",
     redoc_url=None,
+    lifespan=lifespan,
 )
 
 app.add_middleware(
