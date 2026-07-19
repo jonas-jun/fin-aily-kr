@@ -1,3 +1,3 @@
-from app.services.analysis.analyzer import AnalysisResult, analyze_reports
+from app.services.analysis.analyzer import analyze_reports
 
-__all__ = ["AnalysisResult", "analyze_reports"]
+__all__ = ["analyze_reports"]

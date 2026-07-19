@@ -1,26 +1,16 @@
 import logging
 import re
-from dataclasses import dataclass
 from datetime import date, timedelta
 
 import httpx
 from bs4 import BeautifulSoup
 
+from app.models.schemas import ReportMeta
 from app.services.http_client import NAVER_HTML_HEADERS, client_scope
 
 logger = logging.getLogger(__name__)
 
 _BASE = "https://finance.naver.com/research"
-
-
-@dataclass
-class ReportMeta:
-    nid: str
-    title: str
-    firm: str
-    date: str          # "YYYY-MM-DD"
-    detail_url: str
-    pdf_url: str = ""  # fetch_pdf_url() 호출 후 채워짐
 
 
 async def fetch_report_list(

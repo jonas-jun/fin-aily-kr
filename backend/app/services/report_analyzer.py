@@ -1,6 +1,6 @@
 """분석 패키지의 이전 import 경로를 유지하는 호환 모듈."""
 
-from app.services.analysis import AnalysisResult, analyze_reports
+from app.services.analysis import analyze_reports
 from app.services.analysis.formatting import (
     _build_dart_block,
     _build_dart_filings_block,
@@ -22,4 +22,4 @@ from app.services.analysis.prompts import (
     _build_target_price_prompt,
 )
 
-__all__ = ["AnalysisResult", "analyze_reports"]
+__all__ = ["analyze_reports"]

@@ -1,8 +1,12 @@
 import logging
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
-from pydantic import BaseModel
-
+from app.models.schemas import (
+    AnalyzeRequest,
+    AnalyzeResponse,
+    ReportItem,
+    TickerItem,
+)
 from app.services.naver_scraper import fetch_reports_with_pdf
 from app.services.research_pipeline import PipelineError, run_research_pipeline
 from app.services.ticker_resolver import search_tickers
@@ -16,59 +20,6 @@ def _http_error(status_code: int, code: str, message: str) -> HTTPException:
         status_code=status_code,
         detail={"code": code, "message": message},
     )
-
-
-# ── 응답 모델 ──────────────────────────────────────────────────────────────────
-
-class TickerItem(BaseModel):
-    ticker: str
-    name: str
-    market: str = ""
-
-
-class ReportItem(BaseModel):
-    nid: str
-    title: str
-    firm: str
-    date: str
-    detail_url: str
-    pdf_url: str
-
-
-class AnalyzeRequest(BaseModel):
-    query: str | None = None      # 종목명 검색어 — 제공 시 search → top 1 자동 선택
-    ticker: str | None = None
-    name: str | None = None
-    n: int = 5
-    days_limit: int = 90
-    reports: list[ReportItem] | None = None
-
-
-class TargetPrice(BaseModel):
-    avg: float | None
-    min: float | None
-    max: float | None
-    current_price: float | None = None
-
-
-class SourceItem(BaseModel):
-    firm: str
-    title: str
-    date: str
-    pdf_url: str
-    target_price: int | None = None
-
-
-class AnalyzeResponse(BaseModel):
-    ticker: str
-    name: str
-    report_count: int
-    analyzed_at: str
-    target_price: TargetPrice
-    sources: list[SourceItem]
-    model_version: str
-    full_report: str | None = None
-    dart_only: bool = False
 
 
 # ── 엔드포인트 ────────────────────────────────────────────────────────────────
@@ -116,15 +67,8 @@ async def get_reports(
         )
 
     return [
-        ReportItem(
-            nid=r.nid,
-            title=r.title,
-            firm=r.firm,
-            date=r.date,
-            detail_url=r.detail_url,
-            pdf_url=r.pdf_url,
-        )
-        for r in reports
+        ReportItem(**report.model_dump())
+        for report in reports
     ]
 
 
@@ -138,7 +82,7 @@ async def analyze(body: AnalyzeRequest, request: Request):
     - `reports`를 함께 넣으면 스크래핑을 건너뛴다.
     """
     try:
-        pipeline_result = await run_research_pipeline(
+        result = await run_research_pipeline(
             body,
             http_client=request.app.state.http,
             gemini_client=request.app.state.gemini,
@@ -146,18 +90,4 @@ async def analyze(body: AnalyzeRequest, request: Request):
     except PipelineError as exc:
         raise _http_error(exc.status_code, exc.code, exc.message) from exc
 
-    result = pipeline_result.analysis
-    return AnalyzeResponse(
-        ticker=result.ticker,
-        name=result.name,
-        report_count=result.report_count,
-        analyzed_at=result.analyzed_at,
-        target_price=TargetPrice(
-            **result.target_price,
-            current_price=pipeline_result.current_price,
-        ),
-        sources=[SourceItem(**s) for s in result.sources],
-        model_version=result.model_version,
-        full_report=result.full_report,
-        dart_only=result.dart_only,
-    )
+    return result
