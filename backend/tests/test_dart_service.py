@@ -1,8 +1,11 @@
 import json
 from pathlib import Path
 
+import httpx
+
 from app.services.dart_service import (
     _compute_actual_quarters,
+    _fetch_full_financials,
     _first_amount,
     _parse_account_rows,
 )
@@ -59,3 +62,36 @@ def test_compute_actual_quarters_preserves_none_for_missing_cf_base():
     assert quarters[1]["period"] == "2025 4Q"
     assert quarters[1]["revenue"] == 900
     assert quarters[1]["cfo"] is None
+
+
+async def test_financial_request_passes_api_key_as_query_param():
+    captured_request = None
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal captured_request
+        captured_request = request
+        return httpx.Response(200, json={
+            "status": "000",
+            "list": [{
+                "sj_div": "IS",
+                "account_nm": "매출액",
+                "thstrm_amount": "1,000",
+            }],
+        })
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await _fetch_full_financials(
+            client,
+            corp_code="00126380",
+            year=2025,
+            reprt_code="11011",
+            label="연간",
+            dart_api_key="secret-key",
+        )
+
+    assert result is not None
+    assert result["revenue"] == 1_000
+    assert captured_request is not None
+    assert captured_request.url.path.endswith("/fnlttSinglAcntAll.json")
+    assert captured_request.url.params["crtfc_key"] == "secret-key"
+    assert captured_request.url.params["fs_div"] == "CFS"

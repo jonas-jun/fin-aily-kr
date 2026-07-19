@@ -68,6 +68,8 @@ npm run dev
 # 브라우저 → http://localhost:3000
 ```
 
+백엔드 API 응답 모델을 변경할 때는 `frontend/lib/api.ts`의 타입도 함께 확인합니다.
+
 ### Docker Compose (한 번에 실행)
 
 ```bash

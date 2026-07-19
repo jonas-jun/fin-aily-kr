@@ -11,6 +11,8 @@ from app.services.http_client import NAVER_HTML_HEADERS, client_scope
 logger = logging.getLogger(__name__)
 
 _BASE = "https://finance.naver.com/research"
+_REQUEST_TIMEOUT = 15
+_MAX_REPORT_PAGES = 3
 
 
 async def fetch_report_list(
@@ -28,10 +30,10 @@ async def fetch_report_list(
     cutoff = date.today() - timedelta(days=days_limit)
 
     async with client_scope(client) as http:
-        while len(reports) < n and page <= 3:
+        while len(reports) < n and page <= _MAX_REPORT_PAGES:
             url = f"{_BASE}/company_list.naver?searchType=itemCode&itemCode={ticker}&page={page}"
             try:
-                resp = await http.get(url, headers=NAVER_HTML_HEADERS, timeout=15)
+                resp = await http.get(url, headers=NAVER_HTML_HEADERS, timeout=_REQUEST_TIMEOUT)
                 resp.raise_for_status()
             except httpx.HTTPError as e:
                 logger.error("리포트 목록 요청 실패 (ticker=%s, page=%d): %s", ticker, page, e)
@@ -44,45 +46,17 @@ async def fetch_report_list(
             found_in_page = 0
             date_exceeded = False
             for row in rows:
-                cols = row.select("td")
-                # 구조: [종목명, 제목, 증권사, (빈칸), 날짜, 조회수]
-                if len(cols) < 5:
+                parsed = _parse_row(row)
+                if parsed is None:
                     continue
-
-                link_tag = cols[1].find("a")
-                if not link_tag:
-                    continue
-
-                title = link_tag.get_text(strip=True)
-                firm = cols[2].get_text(strip=True)
-                date_raw = cols[4].get_text(strip=True)  # "26.05.14"
-                href = link_tag.get("href", "")
-
-                nid_match = re.search(r"nid=(\d+)", href)
-                if not nid_match:
-                    continue
-
-                nid = nid_match.group(1)
-                report_date_str = _parse_date(date_raw)
-                detail_url = f"{_BASE}/{href}" if href.startswith("company_read") else href
-
-                try:
-                    report_date = date.fromisoformat(report_date_str)
-                except ValueError:
-                    report_date = None
+                report, report_date = parsed
 
                 # 네이버 리서치는 날짜 역순이므로 cutoff를 벗어나면 이후 리포트도 모두 오래됨
                 if report_date is not None and report_date < cutoff:
                     date_exceeded = True
                     break
 
-                reports.append(ReportMeta(
-                    nid=nid,
-                    title=title,
-                    firm=firm,
-                    date=report_date_str,
-                    detail_url=detail_url,
-                ))
+                reports.append(report)
                 found_in_page += 1
 
                 if len(reports) >= n:
@@ -99,7 +73,11 @@ async def fetch_pdf_url(detail_url: str, client: httpx.AsyncClient | None = None
     """리포트 상세 페이지에서 PDF 직접 링크를 추출한다."""
     async with client_scope(client) as http:
         try:
-            resp = await http.get(detail_url, headers=NAVER_HTML_HEADERS, timeout=15)
+            resp = await http.get(
+                detail_url,
+                headers=NAVER_HTML_HEADERS,
+                timeout=_REQUEST_TIMEOUT,
+            )
             resp.raise_for_status()
         except httpx.HTTPError as e:
             logger.error("상세 페이지 요청 실패 (%s): %s", detail_url, e)
@@ -143,3 +121,37 @@ def _parse_date(raw: str) -> str:
         year = f"20{yy}" if len(yy) == 2 else yy
         return f"{year}-{mm}-{dd}"
     return raw
+
+
+def _parse_row(row) -> tuple[ReportMeta, date | None] | None:
+    """네이버 리서치 테이블 행을 리포트 메타데이터로 변환한다."""
+    columns = row.select("td")
+    if len(columns) < 5:
+        return None
+
+    link = columns[1].find("a")
+    if not link:
+        return None
+
+    href = link.get("href", "")
+    nid_match = re.search(r"nid=(\d+)", href)
+    if not nid_match:
+        return None
+
+    report_date_text = _parse_date(columns[4].get_text(strip=True))
+    try:
+        report_date = date.fromisoformat(report_date_text)
+    except ValueError:
+        report_date = None
+
+    detail_url = f"{_BASE}/{href}" if href.startswith("company_read") else href
+    return (
+        ReportMeta(
+            nid=nid_match.group(1),
+            title=link.get_text(strip=True),
+            firm=columns[2].get_text(strip=True),
+            date=report_date_text,
+            detail_url=detail_url,
+        ),
+        report_date,
+    )

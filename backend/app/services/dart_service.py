@@ -18,6 +18,11 @@ DART_BASE = "https://opendart.fss.or.kr/api"
 
 _FILING_TEXT_LIMIT = 15_000
 _FILING_HTML_FILES = 5
+_DART_REQUEST_TIMEOUT = 20
+_DART_DOWNLOAD_TIMEOUT = 30
+_FINANCIAL_YEAR_COUNT = 2
+_RECENT_QUARTER_COUNT = 5
+_FILING_LOOKBACK_YEARS = 3
 
 # IS 필드: 개별 분기값 (반기보고서=Q2 개별, 3Q보고서=Q3 개별)
 # 4Q = annual − (Q1 + Q2 + Q3)
@@ -118,7 +123,7 @@ async def _load_corp_code_map(client: httpx.AsyncClient | None = None) -> dict[s
                 resp = await http.get(
                     f"{DART_BASE}/corpCode.xml",
                     params={"crtfc_key": settings.dart_api_key},
-                    timeout=30,
+                    timeout=_DART_DOWNLOAD_TIMEOUT,
                 )
                 resp.raise_for_status()
         except Exception as e:
@@ -198,16 +203,19 @@ async def _fetch_full_financials(
     dart_api_key: str,
 ) -> dict | None:
     """fnlttSinglAcntAll로 전체 재무제표 조회. CFS 우선 → OFS 폴백. 실패 시 None."""
-    base = (
-        f"?crtfc_key={dart_api_key}"
-        f"&corp_code={corp_code}"
-        f"&bsns_year={year}"
-        f"&reprt_code={reprt_code}"
-    )
     for fs_div in ("CFS", "OFS"):
-        url = f"{DART_BASE}/fnlttSinglAcntAll.json{base}&fs_div={fs_div}"
         try:
-            resp = await client.get(url, timeout=20)
+            resp = await client.get(
+                f"{DART_BASE}/fnlttSinglAcntAll.json",
+                params={
+                    "crtfc_key": dart_api_key,
+                    "corp_code": corp_code,
+                    "bsns_year": year,
+                    "reprt_code": reprt_code,
+                    "fs_div": fs_div,
+                },
+                timeout=_DART_REQUEST_TIMEOUT,
+            )
             data = resp.json()
         except Exception as e:
             logger.warning("DART 전체계정 조회 실패 (%s %s %s): %s", year, label, fs_div, e)
@@ -316,7 +324,7 @@ async def fetch_last_4_quarters_reports(
         return []
 
     current_year = datetime.now(ZoneInfo("Asia/Seoul")).year
-    years = [current_year - 1, current_year]
+    years = list(range(current_year - _FINANCIAL_YEAR_COUNT + 1, current_year + 1))
 
     all_tasks = []
     task_meta: list[tuple[int, str]] = []
@@ -341,7 +349,7 @@ async def fetch_last_4_quarters_reports(
     for year in years:
         all_quarters.extend(_compute_actual_quarters(cumulative_by_year[year], year))
 
-    return all_quarters[-5:]
+    return all_quarters[-_RECENT_QUARTER_COUNT:]
 
 
 async def fetch_dart_data(
@@ -372,18 +380,23 @@ async def _fetch_filing_documents(
         return []
 
     # DART list.json API는 bgn_de 없이 pblntf_ty만 지정하면 013(데이터 없음)을 반환하는 경우가 있음
-    bgn_de = str(datetime.now(ZoneInfo("Asia/Seoul")).year - 3) + "0101"
+    bgn_de = (
+        str(datetime.now(ZoneInfo("Asia/Seoul")).year - _FILING_LOOKBACK_YEARS)
+        + "0101"
+    )
     async with client_scope(client) as http:
-        list_url = (
-            f"{DART_BASE}/list.json"
-            f"?crtfc_key={settings.dart_api_key}"
-            f"&corp_code={corp_code}"
-            f"&pblntf_ty=A"
-            f"&bgn_de={bgn_de}"
-            f"&page_count={max_count}"
-        )
         try:
-            resp = await http.get(list_url, timeout=30)
+            resp = await http.get(
+                f"{DART_BASE}/list.json",
+                params={
+                    "crtfc_key": settings.dart_api_key,
+                    "corp_code": corp_code,
+                    "pblntf_ty": "A",
+                    "bgn_de": bgn_de,
+                    "page_count": max_count,
+                },
+                timeout=_DART_DOWNLOAD_TIMEOUT,
+            )
             data = resp.json()
         except Exception as e:
             logger.warning("DART 공시 목록 조회 실패 (corp_code=%s): %s", corp_code, e)
@@ -400,13 +413,15 @@ async def _fetch_filing_documents(
                 continue
 
             # DART 공시 원문 ZIP 다운로드: document.xml 엔드포인트 사용
-            doc_url = (
-                f"{DART_BASE}/document.xml"
-                f"?crtfc_key={settings.dart_api_key}"
-                f"&rcept_no={rcept_no}"
-            )
             try:
-                doc_resp = await http.get(doc_url, timeout=30)
+                doc_resp = await http.get(
+                    f"{DART_BASE}/document.xml",
+                    params={
+                        "crtfc_key": settings.dart_api_key,
+                        "rcept_no": rcept_no,
+                    },
+                    timeout=_DART_DOWNLOAD_TIMEOUT,
+                )
                 doc_resp.raise_for_status()
             except Exception as e:
                 logger.warning("DART 문서 다운로드 실패 (rcept_no=%s): %s", rcept_no, e)

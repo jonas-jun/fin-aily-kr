@@ -1,6 +1,7 @@
 import logging
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
+
 from app.models.schemas import (
     AnalyzeRequest,
     AnalyzeResponse,
@@ -66,10 +67,7 @@ async def get_reports(
             f"최근 {days_limit}일 내 발행된 리포트가 없습니다.",
         )
 
-    return [
-        ReportItem(**report.model_dump())
-        for report in reports
-    ]
+    return [ReportItem(**report.model_dump()) for report in reports]
 
 
 @router.post("/analyze", response_model=AnalyzeResponse, summary="AI 통합 보고서 생성")
