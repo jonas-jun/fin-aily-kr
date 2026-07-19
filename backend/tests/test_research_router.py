@@ -2,7 +2,7 @@ import httpx
 import pytest
 
 from app.main import app
-from app.routers import research_router
+from app.services import research_pipeline
 from app.services.naver_scraper import ReportMeta
 from app.services.report_analyzer import AnalysisResult
 
@@ -46,12 +46,12 @@ def _analysis_result(*, dart_only: bool = False) -> AnalysisResult:
 
 async def test_analyze_normal_flow_preserves_response(monkeypatch):
     reports = [ReportMeta("1", "테스트", "테스트증권", "2026-07-18", "detail", "pdf")]
-    monkeypatch.setattr(research_router, "fetch_reports_with_pdf", _async_return(reports))
-    monkeypatch.setattr(research_router, "extract_text_from_pdf_url", _async_return("본문"))
-    monkeypatch.setattr(research_router, "fetch_current_price", _async_return(70_000.0))
-    monkeypatch.setattr(research_router, "fetch_dart_data", _async_return([]))
-    monkeypatch.setattr(research_router, "fetch_dart_filing_texts", _async_return([]))
-    monkeypatch.setattr(research_router, "analyze_reports", _async_return(_analysis_result()))
+    monkeypatch.setattr(research_pipeline, "fetch_reports_with_pdf", _async_return(reports))
+    monkeypatch.setattr(research_pipeline, "extract_text_from_pdf_url", _async_return("본문"))
+    monkeypatch.setattr(research_pipeline, "fetch_current_price", _async_return(70_000.0))
+    monkeypatch.setattr(research_pipeline, "fetch_dart_data", _async_return([]))
+    monkeypatch.setattr(research_pipeline, "fetch_dart_filing_texts", _async_return([]))
+    monkeypatch.setattr(research_pipeline, "analyze_reports", _async_return(_analysis_result()))
 
     response = await _request("POST", "/api/analyze", json={"ticker": "005930", "name": "삼성전자"})
 
@@ -76,11 +76,11 @@ async def test_analyze_normal_flow_preserves_response(monkeypatch):
 
 
 async def test_analyze_uses_dart_fallback(monkeypatch):
-    monkeypatch.setattr(research_router, "fetch_reports_with_pdf", _async_return([]))
-    monkeypatch.setattr(research_router, "fetch_current_price", _async_return(10_000.0))
-    monkeypatch.setattr(research_router, "fetch_dart_data", _async_return([{"period": "2025 1Q"}]))
-    monkeypatch.setattr(research_router, "fetch_dart_filing_texts", _async_return([]))
-    monkeypatch.setattr(research_router, "analyze_reports", _async_return(_analysis_result(dart_only=True)))
+    monkeypatch.setattr(research_pipeline, "fetch_reports_with_pdf", _async_return([]))
+    monkeypatch.setattr(research_pipeline, "fetch_current_price", _async_return(10_000.0))
+    monkeypatch.setattr(research_pipeline, "fetch_dart_data", _async_return([{"period": "2025 1Q"}]))
+    monkeypatch.setattr(research_pipeline, "fetch_dart_filing_texts", _async_return([]))
+    monkeypatch.setattr(research_pipeline, "analyze_reports", _async_return(_analysis_result(dart_only=True)))
 
     response = await _request("POST", "/api/analyze", json={"ticker": "005930", "name": "삼성전자"})
 
@@ -101,7 +101,7 @@ async def test_analyze_rejects_missing_identity(payload, status_code, code):
 
 
 async def test_analyze_returns_not_found_for_unknown_query(monkeypatch):
-    monkeypatch.setattr(research_router, "search_tickers", _async_return([]))
+    monkeypatch.setattr(research_pipeline, "search_tickers", _async_return([]))
 
     response = await _request("POST", "/api/analyze", json={"query": "없는회사"})
 
@@ -113,10 +113,10 @@ async def test_analyze_returns_not_found_for_unknown_query(monkeypatch):
 
 
 async def test_analyze_returns_no_data_when_all_sources_empty(monkeypatch):
-    monkeypatch.setattr(research_router, "fetch_reports_with_pdf", _async_return([]))
-    monkeypatch.setattr(research_router, "fetch_current_price", _async_return(None))
-    monkeypatch.setattr(research_router, "fetch_dart_data", _async_return([]))
-    monkeypatch.setattr(research_router, "fetch_dart_filing_texts", _async_return([]))
+    monkeypatch.setattr(research_pipeline, "fetch_reports_with_pdf", _async_return([]))
+    monkeypatch.setattr(research_pipeline, "fetch_current_price", _async_return(None))
+    monkeypatch.setattr(research_pipeline, "fetch_dart_data", _async_return([]))
+    monkeypatch.setattr(research_pipeline, "fetch_dart_filing_texts", _async_return([]))
 
     response = await _request(
         "POST", "/api/analyze", json={"ticker": "000001", "name": "테스트", "days_limit": 30}
@@ -133,18 +133,18 @@ async def test_analyze_maps_scrape_and_analysis_failures(monkeypatch):
     async def fail(*args, **kwargs):
         raise RuntimeError("failure")
 
-    monkeypatch.setattr(research_router, "fetch_reports_with_pdf", fail)
+    monkeypatch.setattr(research_pipeline, "fetch_reports_with_pdf", fail)
     response = await _request("POST", "/api/analyze", json={"ticker": "005930", "name": "삼성전자"})
     assert response.status_code == 502
     assert response.json()["detail"]["code"] == "SCRAPE_FAILED"
 
     reports = [ReportMeta("1", "테스트", "증권", "2026-07-18", "detail", "pdf")]
-    monkeypatch.setattr(research_router, "fetch_reports_with_pdf", _async_return(reports))
-    monkeypatch.setattr(research_router, "extract_text_from_pdf_url", _async_return("본문"))
-    monkeypatch.setattr(research_router, "fetch_current_price", _async_return(None))
-    monkeypatch.setattr(research_router, "fetch_dart_data", _async_return([]))
-    monkeypatch.setattr(research_router, "fetch_dart_filing_texts", _async_return([]))
-    monkeypatch.setattr(research_router, "analyze_reports", fail)
+    monkeypatch.setattr(research_pipeline, "fetch_reports_with_pdf", _async_return(reports))
+    monkeypatch.setattr(research_pipeline, "extract_text_from_pdf_url", _async_return("본문"))
+    monkeypatch.setattr(research_pipeline, "fetch_current_price", _async_return(None))
+    monkeypatch.setattr(research_pipeline, "fetch_dart_data", _async_return([]))
+    monkeypatch.setattr(research_pipeline, "fetch_dart_filing_texts", _async_return([]))
+    monkeypatch.setattr(research_pipeline, "analyze_reports", fail)
     response = await _request("POST", "/api/analyze", json={"ticker": "005930", "name": "삼성전자"})
     assert response.status_code == 503
     assert response.json()["detail"]["code"] == "ANALYSIS_FAILED"

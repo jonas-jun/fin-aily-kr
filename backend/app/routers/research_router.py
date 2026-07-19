@@ -1,18 +1,21 @@
-import asyncio
 import logging
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
 from pydantic import BaseModel
 
-from app.services.dart_service import fetch_dart_data, fetch_dart_filing_texts
-from app.services.naver_scraper import ReportMeta, fetch_reports_with_pdf
-from app.services.pdf_extractor import extract_text_from_pdf_url
-from app.services.price_fetcher import fetch_current_price
-from app.services.report_analyzer import AnalysisResult, analyze_reports
+from app.services.naver_scraper import fetch_reports_with_pdf
+from app.services.research_pipeline import PipelineError, run_research_pipeline
 from app.services.ticker_resolver import search_tickers
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["research"])
+
+
+def _http_error(status_code: int, code: str, message: str) -> HTTPException:
+    return HTTPException(
+        status_code=status_code,
+        detail={"code": code, "message": message},
+    )
 
 
 # ── 응답 모델 ──────────────────────────────────────────────────────────────────
@@ -79,9 +82,10 @@ async def search(
     """종목명 부분 일치 검색. 네이버 증권 자동완성 API 기반."""
     results = await search_tickers(q, limit=limit, client=request.app.state.http)
     if not results:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={"code": "NOT_FOUND", "message": f"'{q}'에 해당하는 종목을 찾을 수 없습니다."},
+        raise _http_error(
+            status.HTTP_404_NOT_FOUND,
+            "NOT_FOUND",
+            f"'{q}'에 해당하는 종목을 찾을 수 없습니다.",
         )
     return results
 
@@ -98,18 +102,17 @@ async def get_reports(
         reports = await fetch_reports_with_pdf(ticker, n, days_limit, client=request.app.state.http)
     except Exception as e:
         logger.error("리포트 수집 실패 (ticker=%s): %s", ticker, e)
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail={"code": "SCRAPE_FAILED", "message": "리포트 수집에 실패했습니다."},
+        raise _http_error(
+            status.HTTP_502_BAD_GATEWAY,
+            "SCRAPE_FAILED",
+            "리포트 수집에 실패했습니다.",
         )
 
     if not reports:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={
-                "code": "NO_REPORTS",
-                "message": f"최근 {days_limit}일 내 발행된 리포트가 없습니다.",
-            },
+        raise _http_error(
+            status.HTTP_404_NOT_FOUND,
+            "NO_REPORTS",
+            f"최근 {days_limit}일 내 발행된 리포트가 없습니다.",
         )
 
     return [
@@ -134,110 +137,25 @@ async def analyze(body: AnalyzeRequest, request: Request):
     - `ticker` + `name`을 직접 제공해도 된다.
     - `reports`를 함께 넣으면 스크래핑을 건너뛴다.
     """
-    # ── 종목 결정 ─────────────────────────────────────────────────────────────
-    if body.query:
-        results = await search_tickers(body.query, limit=1, client=request.app.state.http)
-        if not results:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail={"code": "NOT_FOUND", "message": f"'{body.query}'에 해당하는 종목을 찾을 수 없습니다."},
-            )
-        ticker = results[0]["ticker"]
-        name = results[0]["name"]
-    elif body.ticker and body.name:
-        ticker = body.ticker
-        name = body.name
-    else:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"code": "MISSING_FIELDS", "message": "'query' 또는 'ticker'+'name'을 제공해야 합니다."},
-        )
-
-    # ── 리포트 수집 ───────────────────────────────────────────────────────────
-    # query로 검색한 경우 reports 필드를 무시하고 항상 직접 수집한다.
-    use_provided = body.reports is not None and not body.query
-    if use_provided:
-        reports: list[ReportMeta] = [
-            ReportMeta(
-                nid=r.nid,
-                title=r.title,
-                firm=r.firm,
-                date=r.date,
-                detail_url=r.detail_url,
-                pdf_url=r.pdf_url,
-            )
-            for r in body.reports
-        ]
-    else:
-        try:
-            reports = await fetch_reports_with_pdf(
-                ticker, body.n, body.days_limit, client=request.app.state.http
-            )
-        except Exception as e:
-            logger.error("리포트 수집 실패: %s", e)
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail={"code": "SCRAPE_FAILED", "message": "리포트 수집에 실패했습니다."},
-            )
-
-    # ── DART 폴백 or 정상 분석 ────────────────────────────────────────────────
-    if not reports:
-        # 증권사 리포트가 없으면 DART 공시 데이터로 폴백 시도
-        dart_data, dart_filings, current_price = await asyncio.gather(
-            fetch_dart_data(ticker, client=request.app.state.http),
-            fetch_dart_filing_texts(ticker, client=request.app.state.http),
-            fetch_current_price(ticker, client=request.app.state.http),
-        )
-        if not dart_data and not dart_filings:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail={
-                    "code": "NO_DATA",
-                    "message": f"최근 {body.days_limit}일 내 발행된 리포트가 없고 DART 공시 데이터도 조회되지 않았습니다.",
-                },
-            )
-        texts_list: list[str] = []
-        dart_only = True
-    else:
-        sem = asyncio.Semaphore(2)
-
-        async def extract_with_limit(url: str) -> str:
-            async with sem:
-                return await extract_text_from_pdf_url(url, client=request.app.state.http)
-
-        fetched_texts, current_price, dart_data, dart_filings = await asyncio.gather(
-            asyncio.gather(*[extract_with_limit(r.pdf_url) for r in reports]),
-            fetch_current_price(ticker, client=request.app.state.http),
-            fetch_dart_data(ticker, client=request.app.state.http),
-            fetch_dart_filing_texts(ticker, client=request.app.state.http),
-        )
-        texts_list = list(fetched_texts)
-        dart_only = False
-
     try:
-        result: AnalysisResult = await analyze_reports(
-            ticker=ticker,
-            name=name,
-            reports=reports,
-            texts=texts_list,
-            dart_data=dart_data or None,
-            dart_filings=dart_filings or None,
-            dart_only=dart_only,
-            client=request.app.state.gemini,
+        pipeline_result = await run_research_pipeline(
+            body,
+            http_client=request.app.state.http,
+            gemini_client=request.app.state.gemini,
         )
-    except Exception as e:
-        logger.error("Gemini 분석 실패: %s", e)
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={"code": "ANALYSIS_FAILED", "message": "보고서 생성에 실패했습니다."},
-        )
+    except PipelineError as exc:
+        raise _http_error(exc.status_code, exc.code, exc.message) from exc
 
+    result = pipeline_result.analysis
     return AnalyzeResponse(
         ticker=result.ticker,
         name=result.name,
         report_count=result.report_count,
         analyzed_at=result.analyzed_at,
-        target_price=TargetPrice(**result.target_price, current_price=current_price),
+        target_price=TargetPrice(
+            **result.target_price,
+            current_price=pipeline_result.current_price,
+        ),
         sources=[SourceItem(**s) for s in result.sources],
         model_version=result.model_version,
         full_report=result.full_report,
