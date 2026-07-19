@@ -1,13 +1,13 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { api, type AnalyzeResponse } from "@/lib/api";
 import { ReportSkeleton } from "@/components/report/ReportSkeleton";
 import { TargetPriceCard } from "@/components/report/TargetPriceCard";
 import { FullReportCard } from "@/components/report/FullReportCard";
 import { SourceList } from "@/components/report/SourceList";
+import { useAnalyze } from "@/hooks/useAnalyze";
 
 function ReportContent() {
   const { ticker } = useParams<{ ticker: string }>();
@@ -15,31 +15,7 @@ function ReportContent() {
   const name = searchParams.get("name") ?? ticker;
   const n = Number(searchParams.get("n") ?? "5");
 
-  const [data, setData] = useState<AnalyzeResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!ticker) return;
-    let cancelled = false;
-
-    const load = async () => {
-      setLoading(true);
-      setError(null);
-      try {
-        const res = await api.analyze(ticker, name, n);
-        if (!cancelled) setData(res);
-      } catch (err: unknown) {
-        if (!cancelled)
-          setError(err instanceof Error ? err.message : "알 수 없는 오류가 발생했습니다.");
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    };
-
-    load();
-    return () => { cancelled = true; };
-  }, [ticker, name, n]);
+  const { data, loading, error } = useAnalyze(ticker, name, n);
 
   return (
     <div>
@@ -69,7 +45,7 @@ function ReportContent() {
       {!loading && !error && data && (
         <div className="space-y-4">
           <TargetPriceCard targetPrice={data.target_price} />
-<FullReportCard report={data.full_report} analyzedAt={data.analyzed_at} dartOnly={data.dart_only} />
+          <FullReportCard report={data.full_report} analyzedAt={data.analyzed_at} dartOnly={data.dart_only} />
           <SourceList sources={data.sources} />
         </div>
       )}

@@ -1,0 +1,32 @@
+[
+  {
+    "sj_div": "IS",
+    "account_nm": "매출원가",
+    "thstrm_amount": "700,000"
+  },
+  {
+    "sj_div": "IS",
+    "account_nm": "매출",
+    "thstrm_amount": "1,000,000"
+  },
+  {
+    "sj_div": "CIS",
+    "account_nm": "영업수익",
+    "thstrm_amount": "2,000,000"
+  },
+  {
+    "sj_div": "CIS",
+    "account_nm": "영업이익",
+    "thstrm_amount": "300,000"
+  },
+  {
+    "sj_div": "CF",
+    "account_nm": "영업활동으로 인한 현금흐름",
+    "thstrm_amount": "400,000"
+  },
+  {
+    "sj_div": "BS",
+    "account_nm": "현금및현금성자산",
+    "thstrm_amount": "500,000"
+  }
+]

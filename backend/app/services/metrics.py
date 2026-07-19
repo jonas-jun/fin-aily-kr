@@ -50,10 +50,6 @@ def compute_net_debt(
     return total_debt - (cash or 0)
 
 
-def compute_debt_ratio(total_liabilities: int | None, equity: int | None) -> float | None:
-    return _pct(total_liabilities, equity)
-
-
 def enrich_quarters(quarters: list[dict]) -> list[dict]:
     """분기 데이터 리스트에 파생 지표를 추가하여 반환.
 
