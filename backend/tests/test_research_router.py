@@ -3,7 +3,9 @@ import pytest
 
 from app.main import app
 from app.models.schemas import AnalyzeResponse, ReportMeta, SourceItem, TargetPrice
+from app.routers import research_router
 from app.services import research_pipeline
+from app.services.naver_scraper import ReportFetchError
 
 
 @pytest.fixture
@@ -148,6 +150,19 @@ async def test_analyze_returns_no_data_when_all_sources_empty(monkeypatch):
     }
 
 
+async def test_analyze_does_not_fall_back_to_dart_when_collection_fails(monkeypatch):
+    """수집 실패를 DART 폴백으로 뭉개지 않는다 — 폴백은 '리포트 0건'일 때만이다."""
+    async def fail(*args, **kwargs):
+        raise ReportFetchError("리포트 목록 조회 실패")
+
+    monkeypatch.setattr(research_pipeline, "fetch_reports_with_pdf", fail)
+
+    response = await _request("POST", "/api/analyze", json={"ticker": "005930", "name": "삼성전자"})
+
+    assert response.status_code == 502
+    assert response.json()["detail"]["code"] == "SCRAPE_FAILED"
+
+
 async def test_analyze_maps_scrape_and_analysis_failures(monkeypatch):
     async def fail(*args, **kwargs):
         raise RuntimeError("failure")
@@ -174,6 +189,43 @@ async def test_analyze_maps_scrape_and_analysis_failures(monkeypatch):
     response = await _request("POST", "/api/analyze", json={"ticker": "005930", "name": "삼성전자"})
     assert response.status_code == 503
     assert response.json()["detail"]["code"] == "ANALYSIS_FAILED"
+
+
+async def test_get_reports_maps_collection_failure_to_502(monkeypatch):
+    async def fail(*args, **kwargs):
+        raise ReportFetchError("리포트 목록 조회 실패")
+
+    monkeypatch.setattr(research_router, "fetch_reports_with_pdf", fail)
+
+    response = await _request("GET", "/api/reports/005930")
+
+    assert response.status_code == 502
+    assert response.json()["detail"]["code"] == "SCRAPE_FAILED"
+
+
+async def test_get_reports_maps_zero_reports_to_404(monkeypatch):
+    """0건은 수집 실패와 다른 코드로 나가야 한다."""
+    monkeypatch.setattr(research_router, "fetch_reports_with_pdf", _async_return([]))
+
+    response = await _request("GET", "/api/reports/005930?days_limit=30")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == {
+        "code": "NO_REPORTS",
+        "message": "최근 30일 내 발행된 리포트가 없습니다.",
+    }
+
+
+@pytest.mark.parametrize("payload", [
+    {"ticker": "005930", "name": "삼성전자", "n": 0},
+    {"ticker": "005930", "name": "삼성전자", "n": 1000},
+    {"ticker": "005930", "name": "삼성전자", "days_limit": 0},
+])
+async def test_analyze_rejects_out_of_range_limits(payload):
+    """n은 상류 API의 pageSize로 그대로 넘어가므로 요청 단계에서 막는다."""
+    response = await _request("POST", "/api/analyze", json=payload)
+
+    assert response.status_code == 422
 
 
 def _async_return(value):

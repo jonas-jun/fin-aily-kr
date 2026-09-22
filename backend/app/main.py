@@ -11,6 +11,9 @@ from fastapi.responses import JSONResponse
 
 from app.config import get_settings
 from app.routers import research_router
+from app.services.http_client import FOLLOW_REDIRECTS
+
+logger = logging.getLogger(__name__)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -24,7 +27,7 @@ settings = get_settings()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     gemini_client = genai.Client(api_key=settings.gemini_api_key) if settings.gemini_api_key else None
-    async with httpx.AsyncClient() as http_client:
+    async with httpx.AsyncClient(follow_redirects=FOLLOW_REDIRECTS) as http_client:
         app.state.http = http_client
         app.state.gemini = gemini_client
         try:
@@ -57,6 +60,7 @@ app.include_router(research_router.router, prefix="/api")
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
+    logger.exception("처리되지 않은 예외 (path=%s)", request.url.path)
     return JSONResponse(
         status_code=500,
         content={"error": {"code": "INTERNAL_ERROR", "message": "서버 오류가 발생했습니다.", "status": 500}},
