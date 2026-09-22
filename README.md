@@ -79,6 +79,44 @@ docker compose up --build
 
 ---
 
+## 배포
+
+| 영역 | 방식 | 트리거 |
+|---|---|---|
+| Frontend (Vercel) | Vercel GitHub 연동 | `main` push 시 자동 |
+| Backend (Cloud Run) | [`deploy-backend.yml`](.github/workflows/deploy-backend.yml) | `main` push 중 `backend/**` 변경 시 자동, 또는 Actions 탭에서 수동 실행 |
+
+백엔드 워크플로우는 **pytest 통과 → Docker 이미지 빌드 → Artifact Registry push(git SHA 태그) → `gcloud run deploy --image` → `/health`·`/api/reports` 스모크** 순으로 진행됩니다.
+기존 revision 의 환경변수(`GEMINI_API_KEY`, `DART_API_KEY`, `CORS_ORIGINS`)는 그대로 유지됩니다.
+
+### 1회 설정
+
+GitHub Actions 가 GCP 에 인증하려면 서비스 계정과 Workload Identity Federation 이 필요합니다.
+설정 커맨드 전문은 [issue #30](https://github.com/jonas-jun/fin-aily-kr/issues/30) 에 있고, 끝나면 GitHub Secrets 두 개를 등록합니다.
+
+| Secret | 값 |
+|---|---|
+| `GCP_WORKLOAD_IDENTITY_PROVIDER` | `projects/<PROJECT_NUMBER>/locations/global/workloadIdentityPools/github/providers/github-oidc` |
+| `GCP_SERVICE_ACCOUNT` | `github-deployer@krx-aily.iam.gserviceaccount.com` |
+
+### 수동 배포 (워크플로우가 막혔을 때)
+
+```bash
+# Cloud Shell 에서
+cd fin-aily-kr && git checkout main && git pull
+gcloud run deploy krx-aily-backend --source ./backend --region asia-northeast3
+```
+
+배포 후 확인:
+
+```bash
+curl -s -w "\nHTTP %{http_code}\n" "https://krx-aily-backend-pqbhq3dqna-du.a.run.app/api/reports/005930?n=2"
+```
+
+`200` + 리포트 목록이면 정상, `502 SCRAPE_FAILED` 면 Cloud Run 에서 네이버 API 에 닿지 못하는 상태입니다.
+
+---
+
 ## API
 
 | Method | Endpoint | 설명 |

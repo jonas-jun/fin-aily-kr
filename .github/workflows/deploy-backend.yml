@@ -1,0 +1,97 @@
+# main 에 backend 변경이 들어오면 테스트 → 이미지 빌드 → Cloud Run 배포 → 스모크 체크.
+# GCP 1회 설정(서비스 계정·WIF·Secrets)은 README 「배포」 절과 issue #30 참고.
+name: Deploy backend
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "backend/**"
+      - ".github/workflows/deploy-backend.yml"
+  workflow_dispatch:
+
+# WIF 로 GCP 토큰을 받으려면 id-token 쓰기 권한이 필요하다. 그 외는 읽기만.
+permissions:
+  contents: read
+  id-token: write
+
+# 연속 merge 시 배포가 순서대로 나가도록 한다. 진행 중인 배포는 취소하지 않는다.
+concurrency:
+  group: deploy-backend
+  cancel-in-progress: false
+
+env:
+  REGION: asia-northeast3
+  SERVICE: krx-aily-backend
+  REGISTRY: asia-northeast3-docker.pkg.dev
+  IMAGE: asia-northeast3-docker.pkg.dev/krx-aily/krx-aily/backend
+
+jobs:
+  test:
+    name: pytest
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+
+      - run: pip install -r requirements-dev.txt
+
+      - run: pytest -q
+
+  deploy:
+    name: build & deploy
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          token_format: access_token
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: oauth2accesstoken
+          password: ${{ steps.auth.outputs.access_token }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      # 빌드를 러너에서 하므로 Cloud Build 권한이 필요 없다. 이미지는 git SHA 로 추적한다.
+      - uses: docker/build-push-action@v6
+        with:
+          context: backend
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ github.sha }}
+            ${{ env.IMAGE }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # --image 배포는 기존 revision 의 환경변수(GEMINI_API_KEY 등)를 그대로 이어받는다.
+      - id: deploy
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: ${{ env.SERVICE }}
+          region: ${{ env.REGION }}
+          image: ${{ env.IMAGE }}:${{ github.sha }}
+
+      # 리포트 수집 경로까지 확인한다 — 배포 직후 네이버 API 도달 여부가 드러난다 (#29).
+      - name: smoke
+        env:
+          URL: ${{ steps.deploy.outputs.url }}
+        run: |
+          curl -fsS "$URL/health"
+          echo
+          curl -fsS -o /dev/null -w "reports: HTTP %{http_code}\n" "$URL/api/reports/005930?n=1"
