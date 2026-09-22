@@ -91,6 +91,9 @@ async def run_research_pipeline(
     reports = await collect_reports(body, ticker, http_client)
 
     if not reports:
+        logger.info(
+            "최근 %d일 내 리포트 0건 → DART 폴백 (ticker=%s)", body.days_limit, ticker
+        )
         dart_data, dart_filings, current_price = await asyncio.gather(
             fetch_dart_data(ticker, client=http_client),
             fetch_dart_filing_texts(ticker, client=http_client),

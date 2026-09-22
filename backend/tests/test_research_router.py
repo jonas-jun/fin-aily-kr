@@ -4,6 +4,7 @@ import pytest
 from app.main import app
 from app.models.schemas import AnalyzeResponse, ReportMeta, SourceItem, TargetPrice
 from app.services import research_pipeline
+from app.services.naver_scraper import ReportFetchError
 
 
 @pytest.fixture
@@ -146,6 +147,19 @@ async def test_analyze_returns_no_data_when_all_sources_empty(monkeypatch):
         "code": "NO_DATA",
         "message": "최근 30일 내 발행된 리포트가 없고 DART 공시 데이터도 조회되지 않았습니다.",
     }
+
+
+async def test_analyze_does_not_fall_back_to_dart_when_collection_fails(monkeypatch):
+    """수집 실패를 DART 폴백으로 뭉개지 않는다 — 폴백은 '리포트 0건'일 때만이다."""
+    async def fail(*args, **kwargs):
+        raise ReportFetchError("리포트 목록 조회 실패")
+
+    monkeypatch.setattr(research_pipeline, "fetch_reports_with_pdf", fail)
+
+    response = await _request("POST", "/api/analyze", json={"ticker": "005930", "name": "삼성전자"})
+
+    assert response.status_code == 502
+    assert response.json()["detail"]["code"] == "SCRAPE_FAILED"
 
 
 async def test_analyze_maps_scrape_and_analysis_failures(monkeypatch):

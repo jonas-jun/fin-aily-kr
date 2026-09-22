@@ -15,7 +15,7 @@
 ## 주요 기능
 
 - **종목 검색** — 네이버 증권 자동완성 기반 실시간 종목명 검색
-- **리포트 자동 수집** — 네이버 증권 리서치에서 최신 리포트 및 PDF 자동 수집 (기본 90일 이내, 최대 5건)
+- **리포트 자동 수집** — 네이버 증권 리서치 API에서 최신 리포트 및 PDF 자동 수집 (기본 90일 이내, 최대 5건)
 - **AI 통합 분석** — Gemini AI가 DART 공시·증권사 리포트를 종합해 아래 10개 섹션으로 보고서 생성
   1. **투자 요약** — 핵심 투자 논지(Thesis)와 리스크 3줄 요약
   2. **재무 성과 분석** — 매출·영업이익·순이익 변동 원인과 트렌드 (분기별 연결재무제표 자동 삽입)
@@ -38,7 +38,7 @@
 | Frontend | Next.js 14 (App Router), TypeScript, Tailwind CSS |
 | Backend | FastAPI, Python 3.13 |
 | AI 분석 | Google Gemini (`google-genai`) |
-| 데이터 수집 | httpx + BeautifulSoup4 (네이버 증권), DART Open API |
+| 데이터 수집 | httpx (네이버 증권 리서치 API), DART Open API |
 | PDF 파싱 | pdfplumber |
 | 배포 | Frontend: Vercel · Backend: Google Cloud Run |
 

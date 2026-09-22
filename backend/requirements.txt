@@ -4,8 +4,6 @@ pydantic
 pydantic-settings
 google-genai
 httpx
-beautifulsoup4
 pdfplumber
 python-dotenv
 pyyaml
-lxml

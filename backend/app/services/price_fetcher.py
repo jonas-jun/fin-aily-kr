@@ -2,13 +2,11 @@ import json
 import logging
 
 import httpx
-from bs4 import BeautifulSoup
 
 from app.services.http_client import NAVER_HTML_HEADERS, client_scope
 
 logger = logging.getLogger(__name__)
 
-_MAIN_URL = "https://finance.naver.com/item/main.naver?code={ticker}"
 _MOBILE_URL = "https://m.stock.naver.com/api/stock/{ticker}/basic"
 _POLLING_URL = "https://polling.finance.naver.com/api/realtime"
 
@@ -17,34 +15,13 @@ async def fetch_current_price(
     ticker: str,
     client: httpx.AsyncClient | None = None,
 ) -> float | None:
-    """현재주가 조회. 네이버 메인 페이지 → 모바일 API → 폴링 API 순으로 시도한다."""
+    """현재주가 조회. 모바일 API → 폴링 API 순으로 시도한다."""
     async with client_scope(client) as http:
-        price = await _fetch_from_main_page(ticker, client=http)
-        if price is not None:
-            return price
-
         price = await _fetch_from_mobile_api(ticker, client=http)
         if price is not None:
             return price
 
         return await _fetch_from_polling_api(ticker, client=http)
-
-
-async def _fetch_from_main_page(ticker: str, client: httpx.AsyncClient | None = None) -> float | None:
-    """finance.naver.com 메인 페이지 HTML에서 현재주가를 파싱한다."""
-    url = _MAIN_URL.format(ticker=ticker)
-    try:
-        async with client_scope(client) as http:
-            resp = await http.get(url, headers=NAVER_HTML_HEADERS, timeout=10)
-            resp.raise_for_status()
-        html = resp.content.decode("euc-kr", errors="replace")
-        soup = BeautifulSoup(html, "html.parser")
-        tag = soup.select_one("p.no_today em span.blind")
-        if tag:
-            return float(tag.text.strip().replace(",", ""))
-    except Exception as e:
-        logger.warning("메인페이지 주가 조회 실패 (ticker=%s): %s", ticker, e)
-    return None
 
 
 async def _fetch_from_mobile_api(ticker: str, client: httpx.AsyncClient | None = None) -> float | None:

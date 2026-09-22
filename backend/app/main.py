@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 
 from app.config import get_settings
 from app.routers import research_router
+from app.services.http_client import FOLLOW_REDIRECTS
 
 logging.basicConfig(
     level=logging.INFO,
@@ -24,7 +25,7 @@ settings = get_settings()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     gemini_client = genai.Client(api_key=settings.gemini_api_key) if settings.gemini_api_key else None
-    async with httpx.AsyncClient() as http_client:
+    async with httpx.AsyncClient(follow_redirects=FOLLOW_REDIRECTS) as http_client:
         app.state.http = http_client
         app.state.gemini = gemini_client
         try:
