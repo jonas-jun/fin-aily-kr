@@ -13,6 +13,8 @@ from app.config import get_settings
 from app.routers import research_router
 from app.services.http_client import FOLLOW_REDIRECTS
 
+logger = logging.getLogger(__name__)
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(levelname)s %(name)s %(message)s",
@@ -58,6 +60,7 @@ app.include_router(research_router.router, prefix="/api")
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
+    logger.exception("처리되지 않은 예외 (path=%s)", request.url.path)
     return JSONResponse(
         status_code=500,
         content={"error": {"code": "INTERNAL_ERROR", "message": "서버 오류가 발생했습니다.", "status": 500}},

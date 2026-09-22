@@ -63,23 +63,27 @@ async def collect_reports(
     body: AnalyzeRequestData,
     ticker: str,
     client: httpx.AsyncClient,
-) -> list[ReportMeta]:
+) -> tuple[list[ReportMeta], str]:
+    """리포트 목록과 그 출처를 함께 돌려준다 — 0건일 때 로그가 사실만 말하도록."""
     if body.reports is not None and not body.query:
         return [
             ReportMeta(**report.model_dump())
             for report in body.reports
-        ]
+        ], "client_supplied"
 
     try:
-        return await fetch_reports_with_pdf(
+        reports = await fetch_reports_with_pdf(
             ticker,
             body.n,
             body.days_limit,
             client=client,
         )
     except Exception as exc:
-        logger.error("리포트 수집 실패: %s", exc)
+        # 예상 못 한 예외도 502로 묶이므로(공개 오류 계약 유지), 추적은 로그에서 받는다.
+        logger.exception("리포트 수집 실패 (ticker=%s)", ticker)
         raise PipelineError(502, "SCRAPE_FAILED", "리포트 수집에 실패했습니다.") from exc
+
+    return reports, "fetched"
 
 
 async def run_research_pipeline(
@@ -88,11 +92,14 @@ async def run_research_pipeline(
     gemini_client: genai.Client | None,
 ) -> AnalyzeResponse:
     ticker, name = await resolve_ticker(body, http_client)
-    reports = await collect_reports(body, ticker, http_client)
+    reports, report_source = await collect_reports(body, ticker, http_client)
 
     if not reports:
         logger.info(
-            "최근 %d일 내 리포트 0건 → DART 폴백 (ticker=%s)", body.days_limit, ticker
+            "리포트 0건 → DART 폴백 (ticker=%s, days_limit=%d, source=%s)",
+            ticker,
+            body.days_limit,
+            report_source,
         )
         dart_data, dart_filings, current_price = await asyncio.gather(
             fetch_dart_data(ticker, client=http_client),

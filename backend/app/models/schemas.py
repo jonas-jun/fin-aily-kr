@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class TickerItem(BaseModel):
@@ -28,8 +28,10 @@ class AnalyzeRequest(BaseModel):
     query: str | None = None
     ticker: str | None = None
     name: str | None = None
-    n: int = 5
-    days_limit: int = 90
+    # /reports 엔드포인트의 Query 제약과 맞춘다. n은 상류 API의 pageSize로 넘어가므로
+    # 무제약이면 리포트 수백 건 × 상세/PDF 왕복이 그대로 요청된다.
+    n: int = Field(default=5, ge=1, le=20)
+    days_limit: int = Field(default=90, ge=1, le=365)
     reports: list[ReportItem] | None = None
 
 

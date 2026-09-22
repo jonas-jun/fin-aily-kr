@@ -49,11 +49,12 @@ async def get_reports(
     n: int = Query(default=5, ge=1, le=20, description="수집할 리포트 수"),
     days_limit: int = Query(default=90, ge=1, description="리포트 발행 기간 제한 (일)"),
 ):
-    """네이버 증권 리서치에서 해당 종목의 최신 리포트 목록과 PDF URL을 수집한다."""
+    """네이버 증권 리서치 API에서 해당 종목의 최신 리포트 목록과 PDF URL을 수집한다."""
     try:
         reports = await fetch_reports_with_pdf(ticker, n, days_limit, client=request.app.state.http)
     except Exception as e:
         logger.error("리포트 수집 실패 (ticker=%s): %s", ticker, e)
+        # SCRAPE_FAILED: 스크래핑 시절의 이름이지만 공개 응답 코드라 유지한다.
         raise _http_error(
             status.HTTP_502_BAD_GATEWAY,
             "SCRAPE_FAILED",
@@ -77,7 +78,7 @@ async def analyze(body: AnalyzeRequest, request: Request):
 
     - `query`를 제공하면 종목 검색 후 상위 1개 종목으로 자동 진행한다.
     - `ticker` + `name`을 직접 제공해도 된다.
-    - `reports`를 함께 넣으면 스크래핑을 건너뛴다.
+    - `reports`를 함께 넣으면 네이버 리서치 API 호출을 건너뛴다.
     """
     try:
         result = await run_research_pipeline(
